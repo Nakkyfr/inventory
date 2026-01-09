@@ -1,7 +1,7 @@
 import { useState } from 'react';
+import Dashboard from './pages/Dashboard';
 import InventoryEntry from './pages/InventoryEntry';
-import SalesEntry from './Pages/SalesEntry';
-import Dashboard from './Pages/Dashboard';
+import SalesEntry from './pages/SalesEntry';
 
 function App() {
   const [page, setPage] = useState('dashboard');
