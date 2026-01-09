@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import Dashboard from './pages/Dashboard';
-import InventoryEntry from './pages/InventoryEntry';
-import SalesEntry from './pages/SalesEntry';
+import Dashboard from './pages/Dashboard.jsx';
+import InventoryEntry from './pages/InventoryEntry.jsx';
+import SalesEntry from './pages/SalesEntry.jsx';
 
 function App() {
   const [page, setPage] = useState('dashboard');
@@ -15,12 +15,14 @@ function App() {
         >
           Dashboard
         </button>
+
         <button
           className={page === 'inventory' ? 'active' : ''}
           onClick={() => setPage('inventory')}
         >
           Inventory
         </button>
+
         <button
           className={page === 'sales' ? 'active' : ''}
           onClick={() => setPage('sales')}
