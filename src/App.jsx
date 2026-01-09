@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import InventoryEntry from './pages/InventoryEntry';
-import SalesEntry from './pages/SalesEntry';
+import SalesEntry from './Pages/SalesEntry';
 import Dashboard from './Pages/Dashboard';
 
 function App() {
