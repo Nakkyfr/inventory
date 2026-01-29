@@ -1,40 +1,27 @@
-import { useState } from 'react';
-import Dashboard from './Pages/Dashboard.jsx';
-import InventoryEntry from './Pages/InventoryEntry.jsx';
-import SalesEntry from './Pages/SalesEntry.jsx';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+
+import Dashboard from './Pages/dashboard/Dashboard';
+import InventoryIn from './Pages/inventory/InventoryIn';
+import Sales from './Pages/sales/Sales';
+import Returns from './Pages/returns/Returns';
+import BottomNav from './components/navigation/BottomNav';
 
 function App() {
-  const [page, setPage] = useState('dashboard');
-
   return (
-    <div className="app-container">
-      <div className="nav">
-        <button
-          className={page === 'dashboard' ? 'active' : ''}
-          onClick={() => setPage('dashboard')}
-        >
-          Dashboard
-        </button>
+    <BrowserRouter>
+      <div style={{ paddingBottom: 70 }}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/sales" />} />
 
-        <button
-          className={page === 'inventory' ? 'active' : ''}
-          onClick={() => setPage('inventory')}
-        >
-          Inventory
-        </button>
-
-        <button
-          className={page === 'sales' ? 'active' : ''}
-          onClick={() => setPage('sales')}
-        >
-          Sales
-        </button>
+          <Route path="/dashboard/*" element={<Dashboard />} />
+          <Route path="/inventory/*" element={<InventoryIn />} />
+          <Route path="/sales/*" element={<Sales />} />
+          <Route path="/returns/*" element={<Returns />} />
+        </Routes>
       </div>
 
-      {page === 'dashboard' && <Dashboard />}
-      {page === 'inventory' && <InventoryEntry />}
-      {page === 'sales' && <SalesEntry />}
-    </div>
+      <BottomNav />
+    </BrowserRouter>
   );
 }
 
