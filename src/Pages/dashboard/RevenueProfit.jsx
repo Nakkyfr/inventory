@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Box from "../../components/ui/Box";
+import { formatCurrency } from "../../lib/format";
 
 function RevenueProfit() {
   const [todayRevenue, setTodayRevenue] = useState(0);
@@ -9,47 +10,31 @@ function RevenueProfit() {
   const [monthProfit, setMonthProfit] = useState(0);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetchData();
-
-    function onRevenueUpdated() {
-      fetchData();
-    }
-
-    window.addEventListener("revenue:updated", onRevenueUpdated);
-    return () =>
-      window.removeEventListener("revenue:updated", onRevenueUpdated);
-  }, []);
-
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     try {
       setError("");
 
       const today = new Date().toISOString().slice(0, 10);
       const monthKey = today.slice(0, 7) + "-01";
 
-      // Today revenue
       const { data: tr } = await supabase
         .from("revenue_daily")
         .select("revenue")
         .eq("day", today)
         .single();
 
-      // Month revenue
       const { data: mr } = await supabase
         .from("revenue_monthly")
         .select("revenue")
         .eq("month", monthKey)
         .single();
 
-      // Today profit
       const { data: tp } = await supabase
         .from("profit_daily")
         .select("profit")
         .eq("day", today)
         .single();
 
-      // Month profit
       const { data: mp } = await supabase
         .from("profit_monthly")
         .select("profit")
@@ -63,7 +48,23 @@ function RevenueProfit() {
     } catch (err) {
       setError(err.message || "Failed to load dashboard data");
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      fetchData();
+    }, 0);
+
+    function onRevenueUpdated() {
+      fetchData();
+    }
+
+    window.addEventListener("revenue:updated", onRevenueUpdated);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("revenue:updated", onRevenueUpdated);
+    };
+  }, [fetchData]);
 
   return (
     <>
@@ -73,7 +74,6 @@ function RevenueProfit() {
         </Box>
       )}
 
-      {/* Today */}
       <Box style={{ background: "#faf7f2" }}>
         <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
           Today
@@ -83,7 +83,7 @@ function RevenueProfit() {
           <div>
             <div style={{ fontSize: 13, color: "#6b7280" }}>Revenue</div>
             <div style={{ fontSize: 20, fontWeight: 600 }}>
-              ₹{todayRevenue}
+              {formatCurrency(todayRevenue)}
             </div>
           </div>
 
@@ -96,13 +96,12 @@ function RevenueProfit() {
                 color: todayProfit >= 0 ? "#047857" : "#b91c1c"
               }}
             >
-              ₹{todayProfit}
+              {formatCurrency(todayProfit)}
             </div>
           </div>
         </div>
       </Box>
 
-      {/* This Month */}
       <Box style={{ background: "#f8fafc" }}>
         <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
           This Month
@@ -112,7 +111,7 @@ function RevenueProfit() {
           <div>
             <div style={{ fontSize: 13, color: "#6b7280" }}>Revenue</div>
             <div style={{ fontSize: 20, fontWeight: 600 }}>
-              ₹{monthRevenue}
+              {formatCurrency(monthRevenue)}
             </div>
           </div>
 
@@ -125,9 +124,16 @@ function RevenueProfit() {
                 color: monthProfit >= 0 ? "#047857" : "#b91c1c"
               }}
             >
-              ₹{monthProfit}
+              {formatCurrency(monthProfit)}
             </div>
           </div>
+        </div>
+      </Box>
+
+      <Box style={{ background: "#eff6ff" }}>
+        <div style={{ fontSize: 13, color: "#475569" }}>
+          The frontend uses weighted-average costing for finalization checks and profit
+          estimation. Stock additions and reductions remain a Supabase concern.
         </div>
       </Box>
     </>

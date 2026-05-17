@@ -19,7 +19,7 @@ function Dashboard() {
   });
 
   return (
-    <Page title="Dashboard">
+    <Page title="Dashboard" showRoleSwitcher>
       {/* Toggle Buttons */}
       <div
         style={{

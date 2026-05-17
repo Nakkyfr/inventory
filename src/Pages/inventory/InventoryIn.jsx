@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Page from "../../components/layout/Page";
 import Box from "../../components/ui/Box";
-
-const SHOP_ID = "00000000-0000-0000-0000-000000000001";
+import { SHOP_ID } from "../../lib/appConfig";
 
 function InventoryIn() {
   const [products, setProducts] = useState([]);
@@ -14,12 +13,7 @@ function InventoryIn() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetchProducts();
-    fetchEntries();
-  }, []);
-
-  async function fetchProducts() {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from("master_products")
       .select("product_id, product_name")
@@ -27,9 +21,9 @@ function InventoryIn() {
       .order("product_name");
 
     setProducts(data || []);
-  }
+  }, []);
 
-  async function fetchEntries() {
+  const fetchEntries = useCallback(async () => {
     const today = new Date().toISOString().slice(0, 10);
 
     const { data } = await supabase
@@ -45,7 +39,16 @@ function InventoryIn() {
       .order("created_at", { ascending: false });
 
     setEntries(data || []);
-  }
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      fetchProducts();
+      fetchEntries();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchEntries, fetchProducts]);
 
   async function addInventory() {
     setError("");

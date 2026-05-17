@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Page from "../../components/layout/Page";
 import NewSlip from "./NewSlip";
 import SlipsList from "./SlipsList";
+import SlipAudit from "../../components/slips/SlipAudit";
 
 function Sales() {
   const location = useLocation();
+  const navigate = useNavigate();
   const isEdit = location.pathname.includes("/edit/");
+  const editSlipId = isEdit ? location.pathname.split("/edit/")[1] : null;
 
   const [tab, setTab] = useState("new");
 
@@ -45,15 +48,30 @@ function Sales() {
           >
             Saved Slips
           </button>
+
+          <button
+            style={tabStyle(tab === "audit")}
+            onClick={() => setTab("audit")}
+          >
+            Audit
+          </button>
         </div>
       )}
 
       {/* Content */}
       {!isEdit && tab === "new" && <NewSlip />}
       {!isEdit && tab === "saved" && <SlipsList />}
+      {!isEdit && tab === "audit" && (
+        <SlipAudit slipType="SALE" title="Sales Audit" />
+      )}
 
       {/* Edit mode */}
-      {isEdit && <NewSlip />}
+      {isEdit && (
+        <NewSlip
+          editSlipId={editSlipId}
+          onDone={() => navigate("/sales")}
+        />
+      )}
     </Page>
   );
 }

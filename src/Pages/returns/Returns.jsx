@@ -2,6 +2,7 @@ import { useState } from "react";
 import Page from "../../components/layout/Page";
 import NewReturnSlip from "./NewReturnSlip";
 import ReturnSlipsList from "./ReturnSlipsList";
+import SlipAudit from "../../components/slips/SlipAudit";
 
 function Returns() {
   const [tab, setTab] = useState("new");
@@ -34,10 +35,20 @@ function Returns() {
         >
           Saved Returns
         </button>
+
+        <button
+          style={tabStyle(tab === "audit")}
+          onClick={() => setTab("audit")}
+        >
+          Audit
+        </button>
       </div>
 
       {tab === "new" && <NewReturnSlip />}
       {tab === "saved" && <ReturnSlipsList />}
+      {tab === "audit" && (
+        <SlipAudit slipType="RETURN" title="Returns Audit" />
+      )}
     </Page>
   );
 }
