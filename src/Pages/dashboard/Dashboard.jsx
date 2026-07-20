@@ -2,8 +2,11 @@ import { useState } from "react";
 import Page from "../../components/layout/Page";
 import RevenueProfit from "./RevenueProfit";
 import StockSummary from "./StockSummary";
+import Credit from "./Credit";
+import { useRole } from "../../context/useRole";
 
 function Dashboard() {
+  const { can } = useRole();
   const [tab, setTab] = useState("cash");
 
   const tabBtn = (active) => ({
@@ -19,8 +22,7 @@ function Dashboard() {
   });
 
   return (
-    <Page title="Dashboard" showRoleSwitcher>
-      {/* Toggle Buttons */}
+    <Page title="Dashboard">
       <div
         style={{
           display: "flex",
@@ -41,11 +43,20 @@ function Dashboard() {
         >
           Stock Summary
         </button>
+
+        {can("credit") && (
+          <button
+            style={tabBtn(tab === "credit")}
+            onClick={() => setTab("credit")}
+          >
+            Credit
+          </button>
+        )}
       </div>
 
-      {/* Content */}
       {tab === "cash" && <RevenueProfit />}
       {tab === "stock" && <StockSummary />}
+      {tab === "credit" && can("credit") && <Credit />}
     </Page>
   );
 }

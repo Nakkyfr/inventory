@@ -1,8 +1,9 @@
 import { ROLES } from "../../lib/appConfig";
 import { useRole } from "../../context/useRole";
 
-function Page({ title, children, actions, showRoleSwitcher = false }) {
-  const { role, setRole } = useRole();
+function Page({ title, children, actions }) {
+  const { role, setRole, signOut, isMaster, availableShops, activeShopId, setActiveShop } =
+    useRole();
 
   return (
     <div
@@ -31,7 +32,25 @@ function Page({ title, children, actions, showRoleSwitcher = false }) {
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {actions}
-            {showRoleSwitcher && (
+            {isMaster && availableShops.length > 0 && (
+              <select
+                value={activeShopId || availableShops[0]?.shop_id || ""}
+                onChange={(event) => setActiveShop(event.target.value)}
+                style={{
+                  borderRadius: 8,
+                  border: "1px solid #cbd5e1",
+                  padding: "8px 10px",
+                  background: "#ffffff"
+                }}
+              >
+                {availableShops.map((shop) => (
+                  <option key={shop.shop_id} value={shop.shop_id}>
+                    {shop.shop_name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {isMaster && (
               <select
                 value={role}
                 onChange={(event) => setRole(event.target.value)}
@@ -49,6 +68,18 @@ function Page({ title, children, actions, showRoleSwitcher = false }) {
                 ))}
               </select>
             )}
+            <button
+              onClick={signOut}
+              style={{
+                borderRadius: 8,
+                border: "1px solid #cbd5e1",
+                padding: "8px 10px",
+                background: "#ffffff",
+                color: "#0f172a"
+              }}
+            >
+              Logout
+            </button>
           </div>
         </div>
       )}

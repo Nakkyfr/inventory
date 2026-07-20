@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Page from "../../components/layout/Page";
 import Box from "../../components/ui/Box";
@@ -6,10 +6,11 @@ import { exportRowsToCsv } from "../../lib/export";
 import { formatCurrency, formatNumber } from "../../lib/format";
 import { LOW_STOCK_THRESHOLD } from "../../lib/appConfig";
 import { useRole } from "../../context/useRole";
+import { useMountFetch } from "../../lib/useMountFetch";
 
 function StockSummary() {
   const [rows, setRows] = useState([]);
-  const { can } = useRole();
+  const { can, shopId } = useRole();
 
   const fetchStock = useCallback(async () => {
     const { data } = await supabase
@@ -18,12 +19,13 @@ function StockSummary() {
         remaining_quantity,
         purchase_price,
         master_products ( product_name )
-      `);
+      `)
+      .eq("shop_id", shopId);
 
     const map = {};
 
     (data || []).forEach((row) => {
-      const name = row.master_products.product_name;
+      const name = row.master_products?.product_name || "Unknown Product";
       if (!map[name]) {
         map[name] = { qty: 0, cost: 0 };
       }
@@ -49,15 +51,9 @@ function StockSummary() {
     });
 
     setRows(result.sort((a, b) => a.name.localeCompare(b.name)));
-  }, []);
+  }, [shopId]);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      fetchStock();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [fetchStock]);
+  useMountFetch(fetchStock, [fetchStock]);
 
   const lowStockRows = rows.filter((row) => row.level !== "OK");
 

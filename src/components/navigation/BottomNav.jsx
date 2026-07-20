@@ -18,7 +18,7 @@ function BottomNav() {
     can("dashboard") && { path: "/dashboard", label: "Home" },
     can("inventory") && { path: "/inventory", label: "Inventory" },
     can("sales") && { path: "/sales", label: "Sales" },
-    can("returns") && { path: "/returns", label: "Returns" }
+    can("manageUsers") && { path: "/users", label: "Users" }
   ].filter(Boolean);
 
   return (

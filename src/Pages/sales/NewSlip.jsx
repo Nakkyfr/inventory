@@ -1,18 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Box from "../../components/ui/Box";
-import { SHOP_ID } from "../../lib/appConfig";
+import SearchableSelect from "../../components/ui/SearchableSelect";
+import { useRole } from "../../context/useRole";
 import { formatCurrency } from "../../lib/format";
+import { PAYMENT_MODES, DEBTOR_CATEGORIES } from "../../lib/appConfig";
+import { searchProducts } from "../../lib/searchProducts";
+import { useMountFetch } from "../../lib/useMountFetch";
 
 function NewSlip({ editSlipId = null, onDone = null }) {
-  const [products, setProducts] = useState([]);
+  const { shopId, can } = useRole();
+  const canSeePricing = can("managePricing");
   const [slipName, setSlipName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [gstNumber, setGstNumber] = useState("");
+  const [customers, setCustomers] = useState([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [paymentMode, setPaymentMode] = useState("CASH");
+  const [debtorCategory, setDebtorCategory] = useState("OUTSIDER");
   const [items, setItems] = useState([]);
 
-  const [productId, setProductId] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const productId = selectedProduct?.id || "";
+  const [productPickerKey, setProductPickerKey] = useState(0);
   const [quantity, setQuantity] = useState("");
   const [rate, setRate] = useState("");
+  const [presetPrice, setPresetPrice] = useState(0);
+  const [costPrice, setCostPrice] = useState(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [loadingSlip, setLoadingSlip] = useState(false);
@@ -21,15 +36,30 @@ function NewSlip({ editSlipId = null, onDone = null }) {
   const isEditing = Boolean(editSlipId);
   const total = items.reduce((sum, item) => sum + item.line_total, 0);
 
-  const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
-      .from("master_products")
-      .select("product_id, product_name")
-      .eq("is_active", true)
-      .order("product_name");
+  const [offcuts, setOffcuts] = useState([]);
 
-    setProducts(data || []);
-  }, []);
+  const handleProductSearch = useCallback((term) => searchProducts(shopId, term), [shopId]);
+
+  const fetchOffcuts = useCallback(async (pid) => {
+    const { data } = await supabase
+      .from("wire_offcuts")
+      .select("id, remaining_length")
+      .eq("shop_id", shopId)
+      .eq("product_id", pid)
+      .order("remaining_length");
+
+    setOffcuts(data || []);
+  }, [shopId]);
+
+  const fetchCustomers = useCallback(async () => {
+    const { data } = await supabase
+      .from("customers")
+      .select("id, name, phone, gst_number")
+      .eq("shop_id", shopId)
+      .order("name");
+
+    setCustomers(data || []);
+  }, [shopId]);
 
   const fetchSlip = useCallback(async () => {
     if (!editSlipId) return;
@@ -39,9 +69,9 @@ function NewSlip({ editSlipId = null, onDone = null }) {
 
     const { data: slip, error: slipError } = await supabase
       .from("sales")
-      .select("id, slip_name, slip_status, slip_type, customer_phone")
+      .select("id, slip_name, slip_status, slip_type, customer_phone, customer_id, payment_mode, debtor_category, customers(gst_number)")
       .eq("id", editSlipId)
-      .eq("shop_id", SHOP_ID)
+      .eq("shop_id", shopId)
       .eq("slip_type", "SALE")
       .single();
 
@@ -59,7 +89,7 @@ function NewSlip({ editSlipId = null, onDone = null }) {
 
     const { data: lineItems, error: itemsError } = await supabase
       .from("sales_slip_items")
-      .select("id, product_id, product_name, quantity, selling_price, line_total")
+      .select("id, product_id, product_name, quantity, selling_price, line_total, discount_percent")
       .eq("slip_id", editSlipId)
       .order("id");
 
@@ -72,6 +102,10 @@ function NewSlip({ editSlipId = null, onDone = null }) {
 
     setSlipName(slip.slip_name || "");
     setCustomerPhone(slip.customer_phone || "");
+    setGstNumber(slip.customers?.gst_number || "");
+    setSelectedCustomerId(slip.customer_id || "");
+    setPaymentMode(slip.payment_mode || "CASH");
+    setDebtorCategory(slip.debtor_category || "OUTSIDER");
     setItems(
       (lineItems || []).map((item) => ({
         id: item.id,
@@ -82,22 +116,86 @@ function NewSlip({ editSlipId = null, onDone = null }) {
         line_total: Number(item.line_total || 0)
       }))
     );
-  }, [editSlipId]);
+  }, [editSlipId, shopId]);
+
+  useMountFetch(() => {
+    fetchCustomers();
+    fetchSlip();
+  }, [fetchCustomers, fetchSlip]);
+
+  function applyCustomer(match) {
+    if (!match) return;
+    setSelectedCustomerId(match.id);
+    setSlipName(match.name);
+    setCustomerPhone(match.phone || "");
+    setGstNumber(match.gst_number || "");
+  }
+
+  function selectCustomer(customerId) {
+    if (!customerId) {
+      setSelectedCustomerId("");
+      setSlipName("");
+      setCustomerPhone("");
+      setGstNumber("");
+      return;
+    }
+
+    applyCustomer(customers.find((entry) => entry.id === customerId));
+  }
+
+  function matchCustomerOnBlur(field, value) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+
+    const match = customers.find((entry) =>
+      field === "name" ? entry.name === trimmed : entry[field] === trimmed
+    );
+    if (match) applyCustomer(match);
+  }
+
+  const fetchPricing = useCallback(async (pid) => {
+    setPricingLoading(true);
+    const { data, error: pricingError } = await supabase.rpc("product_pricing_preview", {
+      p_product_id: pid,
+      p_shop_id: shopId
+    });
+    setPricingLoading(false);
+
+    if (pricingError || !data?.[0]) return;
+
+    const row = data[0];
+    const preset = Number(row.preset_price || 0);
+    setPresetPrice(preset);
+    setCostPrice(row.purchase_price == null ? null : Number(row.purchase_price));
+    setRate(preset ? String(preset) : "");
+  }, [shopId]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      fetchProducts();
-      fetchSlip();
-    }, 0);
+    if (!productId) {
+      setPresetPrice(0);
+      setCostPrice(null);
+      setOffcuts([]);
+      return;
+    }
+    fetchPricing(productId);
 
-    return () => window.clearTimeout(timeoutId);
-  }, [fetchProducts, fetchSlip]);
+    if (selectedProduct?.bundle_length) {
+      fetchOffcuts(productId);
+    } else {
+      setOffcuts([]);
+    }
+  }, [productId, fetchPricing, fetchOffcuts, selectedProduct]);
 
   function resetForm() {
     setSlipName("");
     setCustomerPhone("");
+    setGstNumber("");
+    setSelectedCustomerId("");
+    setPaymentMode("CASH");
+    setDebtorCategory("OUTSIDER");
     setItems([]);
-    setProductId("");
+    setSelectedProduct(null);
+    setProductPickerKey((key) => key + 1);
     setQuantity("");
     setRate("");
   }
@@ -110,20 +208,19 @@ function NewSlip({ editSlipId = null, onDone = null }) {
       return;
     }
 
-    const product = products.find((entry) => entry.product_id === productId);
-
     setItems((prev) => [
       ...prev,
       {
         product_id: productId,
-        product_name: product?.product_name || "Unknown Product",
+        product_name: selectedProduct?.label || "Unknown Product",
         quantity: Number(quantity),
         selling_price: Number(rate),
         line_total: Number(quantity) * Number(rate)
       }
     ]);
 
-    setProductId("");
+    setSelectedProduct(null);
+    setProductPickerKey((key) => key + 1);
     setQuantity("");
     setRate("");
   }
@@ -138,67 +235,34 @@ function NewSlip({ editSlipId = null, onDone = null }) {
       return;
     }
 
+    if (paymentMode === "CREDIT" && (!slipName.trim() || !customerPhone.trim())) {
+      setError("Credit sales require a customer name and phone number");
+      return;
+    }
+
     setSaving(true);
     setError("");
 
     try {
-      let slipId = editSlipId;
-      const salesPayload = {
-        slip_name: slipName || null,
-        total_amount: total,
-        customer_phone: customerPhone || null,
-        payment_status: "UNPAID"
-      };
+      const { error: saveError } = await supabase.rpc("save_slip_draft", {
+        p_slip_id: editSlipId,
+        p_shop_id: shopId,
+        p_slip_name: slipName || null,
+        p_customer_phone: customerPhone || null,
+        p_payment_mode: paymentMode,
+        p_debtor_category: paymentMode === "CREDIT" ? debtorCategory : null,
+        p_gst_number: gstNumber || null,
+        p_items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          selling_price: item.selling_price,
+          line_total: item.line_total,
+          discount_percent: 0
+        }))
+      });
 
-      if (isEditing) {
-        const { error: slipUpdateError } = await supabase
-          .from("sales")
-          .update(salesPayload)
-          .eq("id", editSlipId)
-          .eq("shop_id", SHOP_ID)
-          .eq("slip_type", "SALE")
-          .eq("slip_status", "DRAFT");
-
-        if (slipUpdateError) throw slipUpdateError;
-
-        const { error: deleteItemsError } = await supabase
-          .from("sales_slip_items")
-          .delete()
-          .eq("slip_id", editSlipId);
-
-        if (deleteItemsError) throw deleteItemsError;
-      } else {
-        const { data: slip, error: slipInsertError } = await supabase
-          .from("sales")
-          .insert([
-            {
-              shop_id: SHOP_ID,
-              slip_type: "SALE",
-              slip_status: "DRAFT",
-              ...salesPayload
-            }
-          ])
-          .select()
-          .single();
-
-        if (slipInsertError) throw slipInsertError;
-        slipId = slip.id;
-      }
-
-      const { error: itemsError } = await supabase
-        .from("sales_slip_items")
-        .insert(
-          items.map((item) => ({
-            slip_id: slipId,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            selling_price: item.selling_price,
-            line_total: item.line_total
-          }))
-        );
-
-      if (itemsError) throw itemsError;
+      if (saveError) throw saveError;
 
       resetForm();
       if (onDone) onDone();
@@ -257,44 +321,158 @@ function NewSlip({ editSlipId = null, onDone = null }) {
       )}
 
       <Box style={{ background: "#faf7f2" }}>
-        <input
-          placeholder="Name"
-          value={slipName}
-          onChange={(event) => setSlipName(event.target.value)}
-          style={inputStyle}
-          disabled={loadingSlip}
-        />
-
-        <input
-          placeholder="Phone number"
-          value={customerPhone}
-          onChange={(event) => setCustomerPhone(event.target.value)}
-          style={inputStyle}
-          disabled={loadingSlip}
-        />
-
         <select
-          value={productId}
-          onChange={(event) => setProductId(event.target.value)}
+          value={selectedCustomerId}
+          onChange={(event) => selectCustomer(event.target.value)}
           style={inputStyle}
           disabled={loadingSlip}
         >
-          <option value="">Select product</option>
-          {products.map((product) => (
-            <option key={product.product_id} value={product.product_id}>
-              {product.product_name}
+          <option value="">New customer (search by typing a name)</option>
+          {customers.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.name}
             </option>
           ))}
         </select>
 
+        <div style={{ display: "flex", gap: 10 }}>
+          <input
+            placeholder="Name"
+            value={slipName}
+            onChange={(event) => {
+              setSlipName(event.target.value);
+              setSelectedCustomerId("");
+            }}
+            onBlur={(event) => matchCustomerOnBlur("name", event.target.value)}
+            style={{ ...inputStyle, flex: 1 }}
+            disabled={loadingSlip}
+          />
+
+          <input
+            placeholder="Phone number"
+            value={customerPhone}
+            onChange={(event) => {
+              setCustomerPhone(event.target.value);
+              setSelectedCustomerId("");
+            }}
+            onBlur={(event) => matchCustomerOnBlur("phone", event.target.value)}
+            style={{ ...inputStyle, flex: 1 }}
+            disabled={loadingSlip}
+          />
+        </div>
+
         <input
-          type="number"
-          placeholder="Quantity"
-          value={quantity}
-          onChange={(event) => setQuantity(event.target.value)}
+          placeholder="GST number (optional)"
+          value={gstNumber}
+          onChange={(event) => {
+            setGstNumber(event.target.value.toUpperCase());
+            setSelectedCustomerId("");
+          }}
+          onBlur={(event) => matchCustomerOnBlur("gst_number", event.target.value.toUpperCase())}
           style={inputStyle}
           disabled={loadingSlip}
         />
+
+        <SearchableSelect
+          key={productPickerKey}
+          placeholder="Search product..."
+          onSearch={handleProductSearch}
+          onSelect={(option) => setSelectedProduct(option)}
+          disabled={loadingSlip}
+        />
+
+        {productId && (
+          <Box style={{ background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+            {pricingLoading ? (
+              <div style={{ fontSize: 13, color: "#6b7280" }}>Loading price...</div>
+            ) : (
+              <>
+                {canSeePricing && (
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      fontSize: 13,
+                      color: "#475569",
+                      marginBottom: 4
+                    }}
+                  >
+                    <span>Purchase Price</span>
+                    <strong>{formatCurrency(costPrice || 0)}</strong>
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 13,
+                    color: "#475569",
+                    marginBottom: 4
+                  }}
+                >
+                  <span>Sale Price</span>
+                  <strong>{formatCurrency(presetPrice)}</strong>
+                </div>
+              </>
+            )}
+          </Box>
+        )}
+
+        {offcuts.length > 0 && (
+          <Box style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              Already-cut pieces available
+            </div>
+            <div style={{ fontSize: 13, color: "#78350f" }}>
+              {offcuts.map((entry) => `${Number(entry.remaining_length)}m`).join(", ")}
+            </div>
+          </Box>
+        )}
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <input
+            type="number"
+            placeholder="Quantity"
+            value={quantity}
+            onChange={(event) => setQuantity(event.target.value)}
+            style={{ ...inputStyle, flex: 1 }}
+            disabled={loadingSlip}
+          />
+
+          <select
+            value={paymentMode}
+            onChange={(event) => setPaymentMode(event.target.value)}
+            style={{ ...inputStyle, flex: 1 }}
+            disabled={loadingSlip}
+          >
+            {Object.entries(PAYMENT_MODES).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {paymentMode === "CREDIT" && (
+          <>
+            <div style={{ fontSize: 12, color: "#9a3412", marginTop: -4, marginBottom: 10 }}>
+              Credit sale — this bill will appear on the Dashboard's Credit tab once sold, with name + phone as the customer record.
+            </div>
+
+            <select
+              value={debtorCategory}
+              onChange={(event) => setDebtorCategory(event.target.value)}
+              style={inputStyle}
+              disabled={loadingSlip}
+            >
+              {Object.entries(DEBTOR_CATEGORIES).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <input
           type="number"
@@ -326,18 +504,21 @@ function NewSlip({ editSlipId = null, onDone = null }) {
                 {item.quantity} x {formatCurrency(item.selling_price)}
               </div>
             </div>
-            <button
-              onClick={() => removeItem(index)}
-              style={{
-                border: "none",
-                borderRadius: 8,
-                background: "#fef2f2",
-                color: "#991b1b",
-                padding: "8px 10px"
-              }}
-            >
-              Remove
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div>{formatCurrency(item.line_total)}</div>
+              <button
+                onClick={() => removeItem(index)}
+                style={{
+                  border: "none",
+                  borderRadius: 8,
+                  background: "#fef2f2",
+                  color: "#991b1b",
+                  padding: "8px 10px"
+                }}
+              >
+                Remove
+              </button>
+            </div>
           </div>
         </Box>
       ))}

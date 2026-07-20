@@ -10,11 +10,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function normalizePhone(phone) {
+export function normalizePhone(phone) {
   return String(phone ?? "").replace(/\D/g, "");
 }
 
-function buildWhatsappText({ slip, items, paymentStatus }) {
+export function buildWhatsappText({ slip, items, paymentStatus }) {
   const lines = [
     COMPANY_DETAILS.name,
     `Name: ${slip.slip_name || "Sale Slip"}`,
@@ -37,7 +37,7 @@ function buildWhatsappText({ slip, items, paymentStatus }) {
 }
 
 export function printSaleSlip({ slip, items }) {
-  const printWindow = window.open("", "_blank", "width=900,height=1100");
+  const printWindow = window.open("", "_blank", "width=420,height=680");
 
   if (!printWindow) {
     throw new Error("Popup blocked. Allow popups to print slips.");
@@ -72,8 +72,8 @@ export function printSaleSlip({ slip, items }) {
         <title>${escapeHtml(slip.slip_name || "Sale Slip")}</title>
         <style>
           @page {
-            size: A4;
-            margin: 12mm;
+            size: 105mm 148mm;
+            margin: 5mm;
           }
           * {
             box-sizing: border-box;
@@ -85,7 +85,7 @@ export function printSaleSlip({ slip, items }) {
             background: #e2e8f0;
           }
           .actions {
-            width: 210mm;
+            width: 105mm;
             margin: 12px auto 0;
             display: flex;
             justify-content: space-between;
@@ -114,97 +114,97 @@ export function printSaleSlip({ slip, items }) {
             background: #e6f0fa;
           }
           .sheet {
-            width: 210mm;
-            min-height: 297mm;
+            width: 105mm;
+            min-height: 148mm;
             margin: 0 auto;
             background: #ffffff;
-            padding: 14mm;
+            padding: 6mm;
           }
           .brand {
             display: flex;
             align-items: center;
-            gap: 18px;
-            margin-bottom: 22px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid #dbeafe;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1.5px solid #dbeafe;
           }
           .logo {
-            width: 84px;
-            height: 84px;
+            width: 32px;
+            height: 32px;
             object-fit: contain;
             border: 1px solid #cbd5e1;
-            border-radius: 12px;
-            padding: 6px;
+            border-radius: 6px;
+            padding: 3px;
             background: #ffffff;
           }
           .company-name {
-            font-size: 28px;
+            font-size: 13px;
             font-weight: 700;
-            margin-bottom: 6px;
+            margin-bottom: 2px;
           }
           .company-meta {
-            font-size: 15px;
+            font-size: 7.5px;
             color: #475569;
-            line-height: 1.6;
+            line-height: 1.4;
           }
           .details {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 18px 26px;
-            margin-bottom: 22px;
+            gap: 8px 10px;
+            margin-bottom: 8px;
           }
           .label {
-            font-size: 12px;
+            font-size: 7px;
             color: #64748b;
             text-transform: uppercase;
             letter-spacing: 0.04em;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
           }
           .value {
-            font-size: 18px;
+            font-size: 10px;
             font-weight: 600;
             word-break: break-word;
           }
           table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 18px;
+            margin-top: 6px;
           }
           th,
           td {
             border-bottom: 1px solid #cbd5e1;
-            padding: 12px 10px;
+            padding: 4px 3px;
             text-align: left;
-            font-size: 15px;
+            font-size: 8.5px;
             vertical-align: top;
           }
           th {
             background: #eff6ff;
-            font-size: 13px;
+            font-size: 7.5px;
           }
           .right {
             text-align: right;
             white-space: nowrap;
           }
           .total {
-            margin-top: 24px;
+            margin-top: 8px;
             display: flex;
             justify-content: flex-end;
           }
           .total-box {
-            width: 72mm;
+            width: 38mm;
             border: 1px solid #cbd5e1;
-            border-radius: 12px;
-            padding: 16px 18px;
+            border-radius: 6px;
+            padding: 6px 8px;
             background: #f8fafc;
           }
           .total-label {
             color: #64748b;
-            font-size: 12px;
-            margin-bottom: 6px;
+            font-size: 7px;
+            margin-bottom: 3px;
           }
           .total-value {
-            font-size: 28px;
+            font-size: 14px;
             font-weight: 700;
           }
           .button-link {

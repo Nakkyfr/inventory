@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Box from "../ui/Box";
-import { SHOP_ID } from "../../lib/appConfig";
 import { exportRowsToCsv } from "../../lib/export";
 import { formatCurrency, formatDateTime } from "../../lib/format";
+import { shareSlipAsPdf } from "../../lib/shareSlip";
 import { useRole } from "../../context/useRole";
+import { useMountFetch } from "../../lib/useMountFetch";
 
-function SlipAudit({ slipType, title }) {
-  const { can } = useRole();
+function SlipAudit({ title }) {
+  const { can, shopId } = useRole();
   const [rows, setRows] = useState([]);
+  const [actorById, setActorById] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [sharingId, setSharingId] = useState(null);
+
+  const [returnPanelId, setReturnPanelId] = useState(null);
+  const [returnDrafts, setReturnDrafts] = useState({});
+  const [returningId, setReturningId] = useState(null);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -19,8 +26,8 @@ function SlipAudit({ slipType, title }) {
     const { data, error: fetchError } = await supabase
       .from("sales")
       .select("*, sales_slip_items(*)")
-      .eq("shop_id", SHOP_ID)
-      .eq("slip_type", slipType)
+      .eq("shop_id", shopId)
+      .in("slip_type", ["SALE", "RETURN"])
       .neq("slip_status", "DRAFT")
       .order("created_at", { ascending: false });
 
@@ -32,15 +39,34 @@ function SlipAudit({ slipType, title }) {
     }
 
     setRows(data || []);
-  }, [slipType]);
+    if (can("viewAudit")) {
+      const { data: users } = await supabase.rpc("owner_shop_users", { p_shop_id: shopId });
+      const mapped = (users || []).reduce((acc, row) => {
+        acc[row.id] = row.email || row.display_name || row.id.slice(0, 8);
+        return acc;
+      }, {});
+      setActorById(mapped);
+    }
+  }, [can, shopId]);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      fetchRows();
-    }, 0);
+  useMountFetch(fetchRows, [fetchRows]);
 
-    return () => window.clearTimeout(timeoutId);
-  }, [fetchRows]);
+  const slipNameById = useMemo(
+    () => rows.reduce((acc, row) => ({ ...acc, [row.id]: row.slip_name || "Untitled Slip" }), {}),
+    [rows]
+  );
+
+  const alreadyReturnedByOriginal = useMemo(() => {
+    const map = {};
+    rows.forEach((row) => {
+      if (row.slip_type !== "RETURN" || row.slip_status !== "SOLD" || !row.original_slip_id) return;
+      const bucket = (map[row.original_slip_id] ||= {});
+      (row.sales_slip_items || []).forEach((item) => {
+        bucket[item.product_id] = (bucket[item.product_id] || 0) + Number(item.quantity || 0);
+      });
+    });
+    return map;
+  }, [rows]);
 
   async function voidSlip(row) {
     if (!can("void")) return;
@@ -64,11 +90,104 @@ function SlipAudit({ slipType, title }) {
     window.dispatchEvent(new Event("revenue:updated"));
   }
 
+  async function shareSlip(row) {
+    setSharingId(row.id);
+    setError("");
+
+    try {
+      await shareSlipAsPdf({ slip: row, items: row.sales_slip_items || [] });
+    } catch (shareError) {
+      setError(shareError.message || "Unable to share slip");
+    } finally {
+      setSharingId(null);
+    }
+  }
+
+  function toggleReturnPanel(row) {
+    if (returnPanelId === row.id) {
+      setReturnPanelId(null);
+      return;
+    }
+
+    const alreadyReturned = alreadyReturnedByOriginal[row.id] || {};
+
+    const totalsByProduct = {};
+    (row.sales_slip_items || []).forEach((item) => {
+      const bucket = (totalsByProduct[item.product_id] ||= {
+        quantity: 0,
+        refundPrice: item.selling_price ?? 0,
+        productName: item.product_name
+      });
+      bucket.quantity += Number(item.quantity || 0);
+    });
+
+    const draft = {};
+    Object.entries(totalsByProduct).forEach(([productId, info]) => {
+      draft[productId] = {
+        quantity: "0",
+        refundPrice: String(info.refundPrice ?? 0),
+        remaining: info.quantity - (alreadyReturned[productId] || 0),
+        productName: info.productName
+      };
+    });
+
+    setReturnDrafts((prev) => ({ ...prev, [row.id]: draft }));
+    setReturnPanelId(row.id);
+    setError("");
+  }
+
+  function updateReturnDraft(saleId, productId, field, value) {
+    setReturnDrafts((prev) => ({
+      ...prev,
+      [saleId]: {
+        ...prev[saleId],
+        [productId]: { ...prev[saleId][productId], [field]: value }
+      }
+    }));
+  }
+
+  async function confirmReturn(row) {
+    const draft = returnDrafts[row.id] || {};
+    const items = Object.entries(draft)
+      .map(([productId, entry]) => ({
+        product_id: productId,
+        quantity: Number(entry.quantity) || 0,
+        refund_price: Number(entry.refundPrice) || 0
+      }))
+      .filter((item) => item.quantity > 0);
+
+    if (items.length === 0) {
+      setError("Enter a return quantity for at least one item");
+      return;
+    }
+
+    setReturningId(row.id);
+    setError("");
+
+    const { error: returnError } = await supabase.rpc("create_partial_return", {
+      p_original_slip_id: row.id,
+      p_items: items
+    });
+
+    setReturningId(null);
+
+    if (returnError) {
+      setError(returnError.message);
+      return;
+    }
+
+    setReturnPanelId(null);
+    fetchRows();
+    window.dispatchEvent(new Event("revenue:updated"));
+  }
+
   function exportAudit() {
     exportRowsToCsv(
-      `${slipType.toLowerCase()}-audit.csv`,
+      "sales-audit.csv",
       [
+        { key: "slip_type", label: "Type" },
         { key: "slip_name", label: "Slip Name" },
+        { key: "created_by", label: "Created By" },
         { key: "slip_status", label: "Status" },
         { key: "total_amount", label: "Total Amount" },
         { key: "cost_of_goods_sold", label: "Cost of Goods Sold" },
@@ -98,7 +217,7 @@ function SlipAudit({ slipType, title }) {
           <div>
             <div style={{ fontWeight: 600 }}>{title}</div>
             <div style={{ fontSize: 13, color: "#64748b" }}>
-              Completed and voided slips with profit trail
+              Sales and returns with profit trail
             </div>
           </div>
           {can("export") && (
@@ -129,15 +248,39 @@ function SlipAudit({ slipType, title }) {
               <div style={{ fontSize: 13, color: "#64748b" }}>
                 {formatDateTime(row.completed_at || row.created_at)}
               </div>
+              {row.slip_type === "RETURN" && row.original_slip_id && (
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  Return against: {slipNameById[row.original_slip_id] || row.original_slip_id.slice(0, 8)}
+                </div>
+              )}
+              {can("viewAudit") && row.created_by && (
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  By: {actorById[row.created_by] || row.created_by.slice(0, 8)}
+                </div>
+              )}
             </div>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: row.slip_status === "VOID" ? "#b91c1c" : "#0369a1"
-              }}
-            >
-              {row.slip_status}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background: row.slip_type === "RETURN" ? "#fef3c7" : "#e6f0fa",
+                  color: row.slip_type === "RETURN" ? "#92400e" : "#1f2937"
+                }}
+              >
+                {row.slip_type}
+              </span>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: row.slip_status === "VOID" ? "#b91c1c" : "#0369a1"
+                }}
+              >
+                {row.slip_status}
+              </span>
             </div>
           </div>
 
@@ -183,10 +326,44 @@ function SlipAudit({ slipType, title }) {
             ))}
           </div>
 
+          <button
+            style={{
+              marginTop: 12,
+              width: "100%",
+              height: 40,
+              borderRadius: 8,
+              border: "none",
+              background: "#dcfce7",
+              color: "#166534"
+            }}
+            disabled={sharingId === row.id}
+            onClick={() => shareSlip(row)}
+          >
+            {sharingId === row.id ? "Preparing PDF..." : "Share as PDF"}
+          </button>
+
+          {can("void") && row.slip_type === "SALE" && row.slip_status === "SOLD" && (
+            <button
+              style={{
+                marginTop: 8,
+                width: "100%",
+                height: 40,
+                borderRadius: 8,
+                border: "1px solid #cbd5e1",
+                background: "#ffffff",
+                color: "#0f172a"
+              }}
+              disabled={loading}
+              onClick={() => toggleReturnPanel(row)}
+            >
+              {returnPanelId === row.id ? "Cancel Return" : "Return Items"}
+            </button>
+          )}
+
           {can("void") && row.slip_status !== "VOID" && (
             <button
               style={{
-                marginTop: 12,
+                marginTop: 8,
                 width: "100%",
                 height: 40,
                 borderRadius: 8,
@@ -199,6 +376,64 @@ function SlipAudit({ slipType, title }) {
             >
               Void Slip
             </button>
+          )}
+
+          {returnPanelId === row.id && (
+            <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Return items</div>
+              {Object.entries(returnDrafts[row.id] || {}).map(([productId, entry]) => (
+                <div key={productId} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>
+                    {entry.productName}{" "}
+                    <span style={{ color: "#64748b" }}>({entry.remaining} returnable)</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      type="number"
+                      min="0"
+                      max={entry.remaining}
+                      placeholder="Qty"
+                      value={entry.quantity}
+                      onChange={(event) => updateReturnDraft(row.id, productId, "quantity", event.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: 8,
+                        borderRadius: 6,
+                        border: "1px solid #cbd5e1",
+                        boxSizing: "border-box"
+                      }}
+                    />
+                    <input
+                      type="number"
+                      placeholder="Refund price"
+                      value={entry.refundPrice}
+                      onChange={(event) => updateReturnDraft(row.id, productId, "refundPrice", event.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: 8,
+                        borderRadius: 6,
+                        border: "1px solid #cbd5e1",
+                        boxSizing: "border-box"
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+              <button
+                onClick={() => confirmReturn(row)}
+                disabled={returningId === row.id}
+                style={{
+                  width: "100%",
+                  height: 40,
+                  borderRadius: 8,
+                  border: "none",
+                  background: "#e6f0fa",
+                  color: "#1f2937"
+                }}
+              >
+                {returningId === row.id ? "Processing..." : "Confirm Return"}
+              </button>
+            </div>
           )}
         </Box>
       ))}

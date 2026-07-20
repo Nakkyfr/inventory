@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import Box from "../../components/ui/Box";
 import { formatCurrency } from "../../lib/format";
+import { useRole } from "../../context/useRole";
+import { useMountFetch } from "../../lib/useMountFetch";
 
 function RevenueProfit() {
+  const { shopId } = useRole();
   const [todayRevenue, setTodayRevenue] = useState(0);
   const [monthRevenue, setMonthRevenue] = useState(0);
   const [todayProfit, setTodayProfit] = useState(0);
@@ -20,26 +23,30 @@ function RevenueProfit() {
       const { data: tr } = await supabase
         .from("revenue_daily")
         .select("revenue")
+        .eq("shop_id", shopId)
         .eq("day", today)
-        .single();
+        .maybeSingle();
 
       const { data: mr } = await supabase
         .from("revenue_monthly")
         .select("revenue")
+        .eq("shop_id", shopId)
         .eq("month", monthKey)
-        .single();
+        .maybeSingle();
 
       const { data: tp } = await supabase
         .from("profit_daily")
         .select("profit")
+        .eq("shop_id", shopId)
         .eq("day", today)
-        .single();
+        .maybeSingle();
 
       const { data: mp } = await supabase
         .from("profit_monthly")
         .select("profit")
+        .eq("shop_id", shopId)
         .eq("month", monthKey)
-        .single();
+        .maybeSingle();
 
       setTodayRevenue(tr?.revenue || 0);
       setMonthRevenue(mr?.revenue || 0);
@@ -48,22 +55,17 @@ function RevenueProfit() {
     } catch (err) {
       setError(err.message || "Failed to load dashboard data");
     }
-  }, []);
+  }, [shopId]);
+
+  useMountFetch(fetchData, [fetchData]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      fetchData();
-    }, 0);
-
     function onRevenueUpdated() {
       fetchData();
     }
 
     window.addEventListener("revenue:updated", onRevenueUpdated);
-    return () => {
-      window.clearTimeout(timeoutId);
-      window.removeEventListener("revenue:updated", onRevenueUpdated);
-    };
+    return () => window.removeEventListener("revenue:updated", onRevenueUpdated);
   }, [fetchData]);
 
   return (

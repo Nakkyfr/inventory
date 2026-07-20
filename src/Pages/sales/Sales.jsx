@@ -1,22 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Page from "../../components/layout/Page";
 import NewSlip from "./NewSlip";
 import SlipsList from "./SlipsList";
 import SlipAudit from "../../components/slips/SlipAudit";
+import { useRole } from "../../context/useRole";
 
 function Sales() {
+  const { can } = useRole();
   const location = useLocation();
   const navigate = useNavigate();
   const isEdit = location.pathname.includes("/edit/");
   const editSlipId = isEdit ? location.pathname.split("/edit/")[1] : null;
 
   const [tab, setTab] = useState("new");
-
-  // If we enter edit mode, hide tabs
-  useEffect(() => {
-    if (isEdit) return;
-  }, [isEdit]);
 
   const tabStyle = (active) => ({
     flex: 1,
@@ -32,7 +29,6 @@ function Sales() {
 
   return (
     <Page title="Sales">
-      {/* Tabs only when NOT editing */}
       {!isEdit && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
           <button
@@ -49,23 +45,23 @@ function Sales() {
             Saved Slips
           </button>
 
-          <button
-            style={tabStyle(tab === "audit")}
-            onClick={() => setTab("audit")}
-          >
-            Audit
-          </button>
+          {can("viewAudit") && (
+            <button
+              style={tabStyle(tab === "audit")}
+              onClick={() => setTab("audit")}
+            >
+              Audit
+            </button>
+          )}
         </div>
       )}
 
-      {/* Content */}
       {!isEdit && tab === "new" && <NewSlip />}
       {!isEdit && tab === "saved" && <SlipsList />}
-      {!isEdit && tab === "audit" && (
-        <SlipAudit slipType="SALE" title="Sales Audit" />
+      {!isEdit && tab === "audit" && can("viewAudit") && (
+        <SlipAudit title="Sales Audit" />
       )}
 
-      {/* Edit mode */}
       {isEdit && (
         <NewSlip
           editSlipId={editSlipId}

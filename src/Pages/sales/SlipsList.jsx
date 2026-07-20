@@ -1,29 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../supabaseClient";
 import Box from "../../components/ui/Box";
-import { SHOP_ID } from "../../lib/appConfig";
-import {
-  buildStockMap,
-  checkStockAvailability,
-  getWeightedAverageCost
-} from "../../lib/inventory";
 import { formatCurrency, formatDateTime } from "../../lib/format";
 import { printSaleSlip } from "../../lib/printSlip";
+import { shareSlipAsPdf } from "../../lib/shareSlip";
+import { PAYMENT_MODES } from "../../lib/appConfig";
 import { useRole } from "../../context/useRole";
+import { useMountFetch } from "../../lib/useMountFetch";
 
 function SlipsList() {
   const navigate = useNavigate();
   const [slips, setSlips] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const { can } = useRole();
+  const { can, shopId } = useRole();
 
   const fetchSlips = useCallback(async () => {
     const { data, error: fetchError } = await supabase
       .from("sales")
-      .select("id, slip_name, total_amount, created_at, customer_phone, payment_status, slip_status")
-      .eq("shop_id", SHOP_ID)
+      .select("id, slip_name, total_amount, created_at, customer_phone, payment_status, payment_mode, slip_status")
+      .eq("shop_id", shopId)
       .eq("slip_type", "SALE")
       .eq("slip_status", "DRAFT")
       .order("created_at", { ascending: false });
@@ -33,15 +30,9 @@ function SlipsList() {
     } else {
       setSlips(data || []);
     }
-  }, []);
+  }, [shopId]);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      fetchSlips();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [fetchSlips]);
+  useMountFetch(fetchSlips, [fetchSlips]);
 
   async function markSold(slip) {
     if (!can("finalize")) {
@@ -49,85 +40,37 @@ function SlipsList() {
       return;
     }
 
-    if (!window.confirm("Mark this slip as sold?")) return;
+    let amountReceived = null;
+
+    if (slip.payment_mode === "CREDIT") {
+      const input = window.prompt(
+        `Amount received now (out of ${formatCurrency(slip.total_amount)})? Leave blank for fully on credit.`,
+        "0"
+      );
+      if (input === null) return;
+
+      const numeric = input.trim() === "" ? 0 : Number(input);
+      if (Number.isNaN(numeric) || numeric < 0 || numeric > slip.total_amount) {
+        setError(`Enter an amount between 0 and ${formatCurrency(slip.total_amount)}`);
+        return;
+      }
+      amountReceived = numeric;
+    } else if (!window.confirm("Mark this slip as sold?")) {
+      return;
+    }
 
     setLoading(true);
     setError("");
 
-    const { data: items, error: itemsError } = await supabase
-      .from("sales_slip_items")
-      .select("product_id, product_name, quantity, selling_price, line_total")
-      .eq("slip_id", slip.id);
-
-    if (itemsError) {
-      setLoading(false);
-      setError(itemsError.message);
-      return;
-    }
-
-    const productIds = [...new Set((items || []).map((item) => item.product_id))];
-    const { data: stockRows, error: stockError } = await supabase
-      .from("inventory_in")
-      .select("product_id, remaining_quantity, purchase_price")
-      .in("product_id", productIds);
-
-    if (stockError) {
-      setLoading(false);
-      setError(stockError.message);
-      return;
-    }
-
-    const stockMap = buildStockMap(stockRows);
-    const issues = checkStockAvailability(items || [], stockMap);
-
-    if (issues.length > 0) {
-      setLoading(false);
-      setError(
-        `Insufficient stock for ${issues
-          .map((issue) => `${issue.productId} (${issue.availableQty}/${issue.requiredQty})`)
-          .join(", ")}`
-      );
-      return;
-    }
-
-    const costOfGoodsSold = (items || []).reduce((sum, item) => {
-      const averageCost = getWeightedAverageCost(stockMap, item.product_id);
-      return sum + Number(item.quantity || 0) * averageCost;
-    }, 0);
-
-    const grossProfit = Number(slip.total_amount || 0) - costOfGoodsSold;
-
-    const fullPayload = {
-      slip_status: "SOLD",
-      completed_at: new Date().toISOString(),
-      cost_of_goods_sold: Number(costOfGoodsSold.toFixed(2)),
-      gross_profit: Number(grossProfit.toFixed(2)),
-      pricing_method: "WEIGHTED_AVG"
-    };
-
-    let { error: updateError } = await supabase
-      .from("sales")
-      .update(fullPayload)
-      .eq("id", slip.id)
-      .eq("slip_status", "DRAFT");
-
-    if (updateError && updateError.message.toLowerCase().includes("column")) {
-      const fallback = await supabase
-        .from("sales")
-        .update({
-          slip_status: "SOLD",
-          completed_at: fullPayload.completed_at
-        })
-        .eq("id", slip.id)
-        .eq("slip_status", "DRAFT");
-
-      updateError = fallback.error;
-    }
+    const { error: rpcError } = await supabase.rpc("finalize_slip", {
+      p_slip_id: slip.id,
+      p_amount_received: amountReceived
+    });
 
     setLoading(false);
 
-    if (updateError) {
-      setError(updateError.message);
+    if (rpcError) {
+      setError(rpcError.message);
       return;
     }
 
@@ -135,30 +78,42 @@ function SlipsList() {
     window.dispatchEvent(new Event("revenue:updated"));
   }
 
-  async function handlePrintSlip(slip) {
-    setLoading(true);
-    setError("");
-
+  async function fetchSlipItems(slip) {
     const { data: items, error: itemsError } = await supabase
       .from("sales_slip_items")
       .select("id, product_name, quantity, selling_price, line_total")
       .eq("slip_id", slip.id)
       .order("id");
 
-    setLoading(false);
+    if (itemsError) throw itemsError;
+    return items || [];
+  }
 
-    if (itemsError) {
-      setError(itemsError.message);
-      return;
-    }
+  async function handlePrintSlip(slip) {
+    setLoading(true);
+    setError("");
 
     try {
-      printSaleSlip({
-        slip,
-        items: items || []
-      });
+      const items = await fetchSlipItems(slip);
+      printSaleSlip({ slip, items });
     } catch (printError) {
       setError(printError.message || "Unable to print slip");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleShareSlip(slip) {
+    setLoading(true);
+    setError("");
+
+    try {
+      const items = await fetchSlipItems(slip);
+      await shareSlipAsPdf({ slip, items });
+    } catch (shareError) {
+      setError(shareError.message || "Unable to share slip");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -168,10 +123,16 @@ function SlipsList() {
     setLoading(true);
     setError("");
 
-    await supabase.from("sales_slip_items").delete().eq("slip_id", id);
-    await supabase.from("sales").delete().eq("id", id);
+    const { error: itemsError } = await supabase.from("sales_slip_items").delete().eq("slip_id", id);
+    const { error: slipError } = itemsError ? {} : await supabase.from("sales").delete().eq("id", id);
 
     setLoading(false);
+
+    if (itemsError || slipError) {
+      setError((itemsError || slipError).message);
+      return;
+    }
+
     setSlips((prev) => prev.filter((entry) => entry.id !== id));
   }
 
@@ -209,12 +170,26 @@ function SlipsList() {
                 {slip.customer_phone}
               </div>
             )}
+            <div
+              style={{
+                display: "inline-block",
+                marginTop: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                color: "#1f2937",
+                background: "#e6f0fa",
+                borderRadius: 999,
+                padding: "2px 8px"
+              }}
+            >
+              {PAYMENT_MODES[slip.payment_mode] || PAYMENT_MODES.CASH}
+            </div>
           </div>
 
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+              gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
               gap: 8,
               marginTop: 10
             }}
@@ -237,6 +212,26 @@ function SlipsList() {
               onClick={() => handlePrintSlip(slip)}
             >
               Print
+            </button>
+
+            <button
+              style={{
+                width: "100%",
+                aspectRatio: "2 / 1",
+                borderRadius: 8,
+                border: "none",
+                background: "#dcfce7",
+                color: "#166534",
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: "pointer",
+                padding: "4px 6px",
+                lineHeight: 1.1
+              }}
+              disabled={loading}
+              onClick={() => handleShareSlip(slip)}
+            >
+              Share
             </button>
 
             <button
