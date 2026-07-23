@@ -17,6 +17,7 @@ function Page({ title, children, actions }) {
         <div
           style={{
             display: "flex",
+            flexWrap: "wrap",
             justifyContent: "space-between",
             alignItems: "flex-start",
             gap: 12,
@@ -30,7 +31,7 @@ function Page({ title, children, actions }) {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             {actions}
             {isMaster && availableShops.length > 0 && (
               <select
