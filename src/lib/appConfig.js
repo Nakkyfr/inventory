@@ -64,3 +64,8 @@ export const DEBTOR_CATEGORIES = {
   MARKET: "Market",
   OUTSIDER: "Outsider"
 };
+
+export const BILL_TYPES = {
+  BILL: "Bill",
+  NO_BILL: "No Bill"
+};

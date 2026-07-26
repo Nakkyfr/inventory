@@ -31,10 +31,6 @@ const optionStyle = (active) => ({
   background: active ? "#e6f0fa" : "#ffffff"
 });
 
-// Type-to-search combobox: queries `onSearch(term)` (debounced) instead of
-// rendering every option up front, so it stays usable against a catalog
-// too large for a plain <select>. Pass `key={selectedId || "empty"}` from
-// the parent to reset it after a selection is consumed.
 function SearchableSelect({ placeholder = "Search...", onSearch, onSelect, disabled = false, style }) {
   const [term, setTerm] = useState("");
   const [options, setOptions] = useState([]);
@@ -126,6 +122,22 @@ function SearchableSelect({ placeholder = "Search...", onSearch, onSelect, disab
                 {option.label}
               </div>
             ))}
+
+          {!loading && options.truncated && (
+            <div
+              style={{
+                padding: "8px 12px",
+                fontSize: 12,
+                color: "#92400e",
+                background: "#fffbeb",
+                borderTop: "1px solid #fde68a",
+                position: "sticky",
+                bottom: 0
+              }}
+            >
+              Showing first {options.length}. Add another word to narrow — e.g. &ldquo;polycab 4mm&rdquo;.
+            </div>
+          )}
         </div>
       )}
     </div>

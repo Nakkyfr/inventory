@@ -3,9 +3,29 @@ import { supabase } from "../../supabaseClient";
 import Box from "../../components/ui/Box";
 import { exportRowsToCsv } from "../../lib/export";
 import { formatCurrency, formatDateTime } from "../../lib/format";
-import { CREDIT_SETTLEMENT_MODES, DEBTOR_CATEGORIES } from "../../lib/appConfig";
+import { CREDIT_SETTLEMENT_MODES, DEBTOR_CATEGORIES, BILL_TYPES } from "../../lib/appConfig";
 import { useRole } from "../../context/useRole";
 import { useMountFetch } from "../../lib/useMountFetch";
+
+const CATEGORY_BADGE = {
+  MARKET: { background: "#ede9fe", color: "#5b21b6" },
+  OUTSIDER: { background: "#e0f2fe", color: "#075985" },
+
+  BILL: { background: "#dcfce7", color: "#166534" },
+  NO_BILL: { background: "#fee2e2", color: "#991b1b" },
+  DEFAULT: { background: "#e2e8f0", color: "#334155" }
+};
+
+const sumDue = (rows, predicate) =>
+  rows.filter(predicate).reduce((sum, row) => sum + Math.max(row.due, 0), 0);
+
+const badgeStyle = (value) => ({
+  fontSize: 10,
+  fontWeight: 700,
+  padding: "2px 6px",
+  borderRadius: 999,
+  ...(CATEGORY_BADGE[value] || CATEGORY_BADGE.DEFAULT)
+});
 
 function Credit() {
   const { can, shopId } = useRole();
@@ -15,6 +35,7 @@ function Credit() {
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState("outstanding");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [billFilter, setBillFilter] = useState("all");
 
   const [expandedId, setExpandedId] = useState(null);
   const [history, setHistory] = useState({});
@@ -30,7 +51,7 @@ function Credit() {
     const { data, error: fetchError } = await supabase
       .from("sales")
       .select(
-        "id, slip_name, customer_phone, customer_id, total_amount, amount_paid, payment_status, debtor_category, created_at, completed_at, customers(gst_number)"
+        "id, slip_name, customer_phone, customer_id, total_amount, amount_paid, payment_status, debtor_category, bill_type, created_at, completed_at, customers(gst_number)"
       )
       .eq("shop_id", shopId)
       .eq("slip_type", "SALE")
@@ -132,6 +153,7 @@ function Credit() {
         { key: "customer_phone", label: "Phone" },
         { key: "gst_number", label: "GST" },
         { key: "debtor_category", label: "Category" },
+        { key: "bill_type", label: "Bill Type" },
         { key: "total_amount", label: "Total" },
         { key: "amount_paid", label: "Paid" },
         { key: "due", label: "Due" },
@@ -140,6 +162,7 @@ function Credit() {
       visibleSales.map((row) => ({
         ...row,
         debtor_category: DEBTOR_CATEGORIES[row.debtor_category] || row.debtor_category || "",
+        bill_type: BILL_TYPES[row.bill_type] || row.bill_type || "",
         total_amount: row.total_amount.toFixed(2),
         amount_paid: row.amount_paid.toFixed(2),
         due: row.due.toFixed(2),
@@ -148,22 +171,29 @@ function Credit() {
     );
   }
 
+  const matchesCategories = (row) =>
+    (categoryFilter === "all" || row.debtor_category === categoryFilter) &&
+    (billFilter === "all" || row.bill_type === billFilter);
+
   const visibleSales = sales.filter((row) => {
-    if (categoryFilter !== "all" && row.debtor_category !== categoryFilter) return false;
+    if (!matchesCategories(row)) return false;
     if (filter === "outstanding") return row.due > 0.004;
     if (filter === "settled") return row.due <= 0.004;
     return true;
   });
 
   const totalOutstanding = sales
-    .filter((row) => categoryFilter === "all" || row.debtor_category === categoryFilter)
+    .filter(matchesCategories)
     .reduce((sum, row) => sum + Math.max(row.due, 0), 0);
-  const marketOutstanding = sales
-    .filter((row) => row.debtor_category === "MARKET")
-    .reduce((sum, row) => sum + Math.max(row.due, 0), 0);
-  const outsiderOutstanding = sales
-    .filter((row) => row.debtor_category === "OUTSIDER")
-    .reduce((sum, row) => sum + Math.max(row.due, 0), 0);
+
+  const outstandingByCategory = [
+    ...Object.entries(DEBTOR_CATEGORIES).map(([key, label]) => ({
+      key, label, amount: sumDue(sales, (row) => row.debtor_category === key)
+    })),
+    ...Object.entries(BILL_TYPES).map(([key, label]) => ({
+      key, label, amount: sumDue(sales, (row) => row.bill_type === key)
+    }))
+  ];
 
   const customerGroups = [];
   const groupByKey = {};
@@ -238,7 +268,8 @@ function Credit() {
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "4px 16px",
             marginTop: 10,
             paddingTop: 10,
             borderTop: "1px solid #dbeafe",
@@ -246,8 +277,11 @@ function Credit() {
             color: "#475569"
           }}
         >
-          <span>Market: {formatCurrency(marketOutstanding)}</span>
-          <span>Outsider: {formatCurrency(outsiderOutstanding)}</span>
+          {outstandingByCategory.map((entry) => (
+            <span key={entry.key}>
+              {entry.label}: {formatCurrency(entry.amount)}
+            </span>
+          ))}
         </div>
       </Box>
 
@@ -263,16 +297,34 @@ function Credit() {
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button style={tabStyle(categoryFilter === "all")} onClick={() => setCategoryFilter("all")}>
           All
         </button>
-        <button style={tabStyle(categoryFilter === "MARKET")} onClick={() => setCategoryFilter("MARKET")}>
-          Market
+        {Object.entries(DEBTOR_CATEGORIES).map(([value, label]) => (
+          <button
+            key={value}
+            style={tabStyle(categoryFilter === value)}
+            onClick={() => setCategoryFilter(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button style={tabStyle(billFilter === "all")} onClick={() => setBillFilter("all")}>
+          All
         </button>
-        <button style={tabStyle(categoryFilter === "OUTSIDER")} onClick={() => setCategoryFilter("OUTSIDER")}>
-          Outsider
-        </button>
+        {Object.entries(BILL_TYPES).map(([value, label]) => (
+          <button
+            key={value}
+            style={tabStyle(billFilter === value)}
+            onClick={() => setBillFilter(value)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {!loading && visibleSales.length === 0 && (
@@ -306,20 +358,16 @@ function Credit() {
             onClick={() => toggleExpand(sale.id)}
           >
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 600 }}>{sale.slip_name || "Untitled Customer"}</div>
                 {sale.debtor_category && (
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 700,
-                      padding: "2px 6px",
-                      borderRadius: 999,
-                      background: sale.debtor_category === "MARKET" ? "#ede9fe" : "#e0f2fe",
-                      color: sale.debtor_category === "MARKET" ? "#5b21b6" : "#075985"
-                    }}
-                  >
+                  <span style={badgeStyle(sale.debtor_category)}>
                     {DEBTOR_CATEGORIES[sale.debtor_category] || sale.debtor_category}
+                  </span>
+                )}
+                {sale.bill_type && (
+                  <span style={badgeStyle(sale.bill_type)}>
+                    {BILL_TYPES[sale.bill_type] || sale.bill_type}
                   </span>
                 )}
               </div>

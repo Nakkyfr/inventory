@@ -2,6 +2,7 @@ import { useState } from "react";
 import Page from "../../components/layout/Page";
 import InventoryIn from "./InventoryIn";
 import ProductPricing from "./ProductPricing";
+import AddProduct from "./AddProduct";
 import { useRole } from "../../context/useRole";
 
 function Inventory() {
@@ -32,10 +33,17 @@ function Inventory() {
             Pricing
           </button>
         )}
+
+        {can("manageProductPricing") && (
+          <button style={tabStyle(tab === "product")} onClick={() => setTab("product")}>
+            New Product
+          </button>
+        )}
       </div>
 
       {tab === "add" && <InventoryIn />}
       {tab === "pricing" && can("manageProductPricing") && <ProductPricing />}
+      {tab === "product" && can("manageProductPricing") && <AddProduct />}
     </Page>
   );
 }

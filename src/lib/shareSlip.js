@@ -26,11 +26,7 @@ export async function shareSlipAsPdf({ slip, items }) {
   const phone = normalizePhone(slip.customer_phone);
 
   if (phone && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(phone);
-    } catch {
-      // clipboard permission denied — not fatal, sharing still proceeds
-    }
+    await navigator.clipboard.writeText(phone).catch(() => {});
   }
 
   if (typeof File !== "undefined" && navigator.canShare) {

@@ -1,33 +1,38 @@
 import { supabase } from "../supabaseClient";
 
-const RESULT_LIMIT = 50;
+const RESULT_LIMIT = 200;
 
-// Server-side, per-keystroke product search — never loads the full catalog
-// (master_products.select() without a limit silently truncates at
-// Supabase/PostgREST's default 1000-row cap once a shop has more products
-// than that, which is exactly what made the old plain <select> unusable).
+function escapeLike(value) {
+  return value.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
 export async function searchProducts(shopId, term) {
   let query = supabase
     .from("master_products")
-    .select("product_id, product_name, bundle_length, list_price, sale_discount_percent")
+    .select("product_id, product_name, unit, bundle_length, list_price, sale_discount_percent, gst_percent")
     .eq("shop_id", shopId)
     .eq("is_active", true)
     .order("product_name")
-    .limit(RESULT_LIMIT);
+    .limit(RESULT_LIMIT + 1);
 
-  const trimmed = term.trim();
-  if (trimmed) {
-    query = query.ilike("product_name", `%${trimmed}%`);
+  for (const word of term.trim().split(/\s+/).filter(Boolean)) {
+    query = query.ilike("product_name", `%${escapeLike(word)}%`);
   }
 
   const { data, error } = await query;
   if (error) return [];
 
-  return (data || []).map((row) => ({
+  const rows = data || [];
+  const results = rows.slice(0, RESULT_LIMIT).map((row) => ({
     id: row.product_id,
     label: row.product_name,
+    unit: row.unit,
     bundle_length: row.bundle_length,
     list_price: row.list_price,
-    sale_discount_percent: row.sale_discount_percent
+    sale_discount_percent: row.sale_discount_percent,
+    gst_percent: row.gst_percent
   }));
+
+  results.truncated = rows.length > RESULT_LIMIT;
+  return results;
 }

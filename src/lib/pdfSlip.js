@@ -115,6 +115,30 @@ export function buildSlipPdfBlob({ slip, items }) {
   });
 
   y += 4;
+
+  const roundOff = Number(slip.round_off || 0);
+  const cashDiscount = Number(slip.cash_discount || 0);
+  const gstAmount = Number(slip.gst_amount || 0);
+  const goodsValue = Number(slip.goods_value || 0);
+  if (roundOff !== 0 || cashDiscount !== 0 || gstAmount !== 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+
+    const lines = [["Subtotal", formatCurrency(goodsValue + cashDiscount)]];
+    if (cashDiscount !== 0) lines.push(["Cash Discount", `-${formatCurrency(cashDiscount)}`]);
+    if (gstAmount !== 0) lines.push(["GST", `+${formatCurrency(gstAmount)}`]);
+    if (roundOff !== 0) {
+      lines.push(["Round Off", `${roundOff > 0 ? "+" : "-"}${formatCurrency(Math.abs(roundOff))}`]);
+    }
+
+    lines.forEach(([label, value], i) => {
+      const lineY = y - 3 - (lines.length - 1 - i) * 4;
+      doc.text(label, PAGE_WIDTH - MARGIN - 40, lineY);
+      doc.text(value, PAGE_WIDTH - MARGIN, lineY, { align: "right" });
+    });
+  }
+
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.3);
   doc.rect(PAGE_WIDTH - MARGIN - 40, y, 40, 12);
