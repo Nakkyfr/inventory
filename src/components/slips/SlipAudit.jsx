@@ -6,6 +6,7 @@ import { formatCurrency, formatDateTime } from "../../lib/format";
 import { shareSlipAsPdf } from "../../lib/shareSlip";
 import { useRole } from "../../context/useRole";
 import { useMountFetch } from "../../lib/useMountFetch";
+import { slipSearchFilter, applySlipSearch } from "../../lib/slipSearch";
 
 function SlipAudit({ title }) {
   const { can, shopId } = useRole();
@@ -18,18 +19,24 @@ function SlipAudit({ title }) {
   const [returnPanelId, setReturnPanelId] = useState(null);
   const [returnDrafts, setReturnDrafts] = useState({});
   const [returningId, setReturningId] = useState(null);
+  const [search, setSearch] = useState("");
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
     setError("");
 
-    const { data, error: fetchError } = await supabase
+    const filter = await slipSearchFilter(shopId, search);
+
+    let query = supabase
       .from("sales")
-      .select("*, sales_slip_items(*)")
+      .select("*, sales_slip_items(*), customers(gst_number)")
       .eq("shop_id", shopId)
       .in("slip_type", ["SALE", "RETURN"])
-      .neq("slip_status", "DRAFT")
-      .order("created_at", { ascending: false });
+      .neq("slip_status", "DRAFT");
+
+    query = applySlipSearch(query, filter).order("created_at", { ascending: false });
+
+    const { data, error: fetchError } = await query;
 
     setLoading(false);
 
@@ -47,7 +54,7 @@ function SlipAudit({ title }) {
       }, {});
       setActorById(mapped);
     }
-  }, [can, shopId]);
+  }, [can, shopId, search]);
 
   useMountFetch(fetchRows, [fetchRows]);
 
@@ -115,17 +122,18 @@ function SlipAudit({ title }) {
     (row.sales_slip_items || []).forEach((item) => {
       const bucket = (totalsByProduct[item.product_id] ||= {
         quantity: 0,
-        refundPrice: item.selling_price ?? 0,
+        lineTotal: 0,
         productName: item.product_name
       });
       bucket.quantity += Number(item.quantity || 0);
+      bucket.lineTotal += Number(item.line_total || 0);
     });
 
     const draft = {};
     Object.entries(totalsByProduct).forEach(([productId, info]) => {
       draft[productId] = {
         quantity: "0",
-        refundPrice: String(info.refundPrice ?? 0),
+        soldRate: info.quantity > 0 ? info.lineTotal / info.quantity : 0,
         remaining: info.quantity - (alreadyReturned[productId] || 0),
         productName: info.productName
       };
@@ -151,8 +159,7 @@ function SlipAudit({ title }) {
     const items = Object.entries(draft)
       .map(([productId, entry]) => ({
         product_id: productId,
-        quantity: Number(entry.quantity) || 0,
-        refund_price: Number(entry.refundPrice) || 0
+        quantity: Number(entry.quantity) || 0
       }))
       .filter((item) => item.quantity > 0);
 
@@ -234,9 +241,28 @@ function SlipAudit({ title }) {
         </Box>
       )}
 
+      <input
+        type="text"
+        placeholder="Search name, phone or GST number"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          padding: 10,
+          borderRadius: 8,
+          border: "1px solid #e5e7eb",
+          marginBottom: 12,
+          fontSize: 15,
+          background: "#ffffff"
+        }}
+      />
+
       {!loading && rows.length === 0 && (
         <Box>
-          <p style={{ color: "#6b7280", margin: 0 }}>No audit records yet</p>
+          <p style={{ color: "#6b7280", margin: 0 }}>
+            {search ? `No slips match "${search}"` : "No audit records yet"}
+          </p>
         </Box>
       )}
 
@@ -248,6 +274,12 @@ function SlipAudit({ title }) {
               <div style={{ fontSize: 13, color: "#64748b" }}>
                 {formatDateTime(row.completed_at || row.created_at)}
               </div>
+              {(row.customer_phone || row.customers?.gst_number) && (
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  {row.customer_phone}
+                  {row.customers?.gst_number ? ` · GST ${row.customers.gst_number}` : ""}
+                </div>
+              )}
               {row.slip_type === "RETURN" && row.original_slip_id && (
                 <div style={{ fontSize: 12, color: "#64748b" }}>
                   Return against: {slipNameById[row.original_slip_id] || row.original_slip_id.slice(0, 8)}
@@ -403,20 +435,26 @@ function SlipAudit({ title }) {
                         boxSizing: "border-box"
                       }}
                     />
-                    <input
-                      type="number"
-                      placeholder="Refund price"
-                      value={entry.refundPrice}
-                      onChange={(event) => updateReturnDraft(row.id, productId, "refundPrice", event.target.value)}
+                    <div
                       style={{
                         flex: 1,
                         padding: 8,
                         borderRadius: 6,
-                        border: "1px solid #cbd5e1",
+                        border: "1px solid #e2e8f0",
+                        background: "#f8fafc",
+                        color: "#475569",
+                        fontSize: 13,
                         boxSizing: "border-box"
                       }}
-                    />
+                    >
+                      Sold at {formatCurrency(entry.soldRate)}
+                    </div>
                   </div>
+                  {Number(entry.quantity) > 0 && (
+                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                      Refund {formatCurrency(Number(entry.quantity) * entry.soldRate)} + GST
+                    </div>
+                  )}
                 </div>
               ))}
               <button

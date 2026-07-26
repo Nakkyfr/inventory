@@ -31,9 +31,48 @@ export function buildWhatsappText({ slip, items, paymentStatus }) {
   });
 
   lines.push("");
+  const off = Number(slip.round_off || 0);
+  const discount = Number(slip.cash_discount || 0);
+  const gst = Number(slip.gst_amount || 0);
+  const goods = Number(slip.goods_value || 0);
+  if (off !== 0 || discount !== 0 || gst !== 0) {
+    lines.push(`Subtotal: ${formatCurrency(goods + discount)}`);
+    if (discount !== 0) lines.push(`Cash Discount: -${formatCurrency(discount)}`);
+    if (gst !== 0) lines.push(`GST: +${formatCurrency(gst)}`);
+    if (off !== 0) lines.push(`Round Off: ${off > 0 ? "+" : "-"}${formatCurrency(Math.abs(off))}`);
+  }
   lines.push(`Total: ${formatCurrency(slip.total_amount)}`);
 
   return encodeURIComponent(lines.join("\n"));
+}
+
+function adjustmentRows(slip) {
+  const off = Number(slip.round_off || 0);
+  const discount = Number(slip.cash_discount || 0);
+  const gst = Number(slip.gst_amount || 0);
+  const goods = Number(slip.goods_value || 0);
+  if (off === 0 && discount === 0 && gst === 0) return "";
+
+  const small = 'class="total-value" style="font-size:14px"';
+  let html = `
+    <div class="total-label">Subtotal</div>
+    <div ${small}>${formatCurrency(goods + discount)}</div>`;
+  if (discount !== 0) {
+    html += `
+    <div class="total-label">Cash Discount ${Number(slip.cash_discount_percent || 0)}%</div>
+    <div ${small}>−${formatCurrency(discount)}</div>`;
+  }
+  if (gst !== 0) {
+    html += `
+    <div class="total-label">GST</div>
+    <div ${small}>+${formatCurrency(gst)}</div>`;
+  }
+  if (off !== 0) {
+    html += `
+    <div class="total-label">Round Off</div>
+    <div ${small}>${off > 0 ? "+" : "−"}${formatCurrency(Math.abs(off))}</div>`;
+  }
+  return html;
 }
 
 export function printSaleSlip({ slip, items }) {
@@ -239,10 +278,6 @@ export function printSaleSlip({ slip, items }) {
       <body>
         <div class="actions">
           <div class="action-group">
-            <button class="toggle ${initialStatus === "PAID" ? "active" : ""}" data-status="PAID">Paid</button>
-            <button class="toggle ${initialStatus === "UNPAID" ? "active" : ""}" data-status="UNPAID">Unpaid</button>
-          </div>
-          <div class="action-group">
             ${
               phone
                 ? `<a id="waLink" class="button-link" href="#" target="_blank" rel="noreferrer">WhatsApp</a>`
@@ -279,7 +314,7 @@ export function printSaleSlip({ slip, items }) {
             </div>
             <div>
               <div class="label">Payment</div>
-              <div id="paymentValue" class="value">${escapeHtml(PAYMENT_STATUSES[initialStatus])}</div>
+              <div class="value">${escapeHtml(PAYMENT_STATUSES[initialStatus])}</div>
             </div>
           </div>
 
@@ -300,39 +335,19 @@ export function printSaleSlip({ slip, items }) {
 
           <div class="total">
             <div class="total-box">
+              ${adjustmentRows(slip)}
               <div class="total-label">Total Amount</div>
               <div class="total-value">${formatCurrency(slip.total_amount)}</div>
             </div>
           </div>
         </div>
         <script>
-          const paymentLabels = ${JSON.stringify(PAYMENT_STATUSES)};
-          const whatsappText = {
-            PAID: ${JSON.stringify(buildWhatsappText({ slip, items, paymentStatus: "PAID" }))},
-            UNPAID: ${JSON.stringify(buildWhatsappText({ slip, items, paymentStatus: "UNPAID" }))}
-          };
           const phone = ${JSON.stringify(phone)};
-
-          function updateWhatsapp(status) {
-            const waLink = document.getElementById("waLink");
-            if (waLink && phone) {
-              waLink.href = "https://wa.me/" + phone + "?text=" + whatsappText[status];
-            }
+          const waLink = document.getElementById("waLink");
+          if (waLink && phone) {
+            waLink.href = "https://wa.me/" + phone + "?text="
+              + ${JSON.stringify(buildWhatsappText({ slip, items, paymentStatus: initialStatus }))};
           }
-
-          function applyStatus(nextStatus) {
-            document.getElementById("paymentValue").textContent = paymentLabels[nextStatus];
-            document.querySelectorAll(".toggle").forEach((button) => {
-              button.classList.toggle("active", button.dataset.status === nextStatus);
-            });
-            updateWhatsapp(nextStatus);
-          }
-
-          document.querySelectorAll(".toggle").forEach((button) => {
-            button.addEventListener("click", () => applyStatus(button.dataset.status));
-          });
-
-          updateWhatsapp(${JSON.stringify(initialStatus)});
         </script>
       </body>
     </html>

@@ -6,6 +6,9 @@ import { useRole } from "../../context/useRole";
 import { formatCurrency } from "../../lib/format";
 import { searchProducts } from "../../lib/searchProducts";
 import { useMountFetch } from "../../lib/useMountFetch";
+import {
+  unitChoices, unitFactor, quantityToBase, priceToBase, defaultUnit, rescalePrice
+} from "../../lib/units";
 
 const INPUT_MODES = {
   LIST_DISCOUNT: "Discount % off list price",
@@ -17,10 +20,9 @@ function InventoryIn() {
   const { shopId, can } = useRole();
   const [selectedProduct, setSelectedProduct] = useState(null);
   const productId = selectedProduct?.id || "";
-  const bundleLength = selectedProduct?.bundle_length || null;
   const [productPickerKey, setProductPickerKey] = useState(0);
   const [quantity, setQuantity] = useState("");
-  const [bundles, setBundles] = useState("");
+  const [entryUnit, setEntryUnit] = useState("base");
   const [inputMode, setInputMode] = useState("UNIT_PRICE");
   const [inputValue, setInputValue] = useState("");
   const [resolvedPrice, setResolvedPrice] = useState(null);
@@ -30,6 +32,14 @@ function InventoryIn() {
   const [error, setError] = useState("");
 
   const handleProductSearch = useCallback((term) => searchProducts(shopId, term), [shopId]);
+
+  const productUnits = unitChoices(selectedProduct);
+  const entryFactor = unitFactor(selectedProduct, entryUnit);
+  const entryUnitLabel = productUnits.find((c) => c.value === entryUnit)?.label;
+
+  const baseQuantity = quantityToBase(quantity, entryFactor);
+  const baseInputValue =
+    inputMode === "UNIT_PRICE" ? priceToBase(inputValue, entryFactor) : Number(inputValue || 0);
 
   const fetchEntries = useCallback(async () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -59,9 +69,9 @@ function InventoryIn() {
       const { data, error: previewError } = await supabase.rpc("preview_inventory_purchase_price", {
         p_shop_id: shopId,
         p_product_id: productId,
-        p_quantity: Number(quantity),
+        p_quantity: baseQuantity,
         p_input_mode: inputMode,
-        p_input_value: Number(inputValue)
+        p_input_value: baseInputValue
       });
 
       if (cancelled) return;
@@ -79,7 +89,7 @@ function InventoryIn() {
     return () => {
       cancelled = true;
     };
-  }, [shopId, productId, quantity, inputMode, inputValue]);
+  }, [shopId, productId, quantity, inputMode, inputValue, baseQuantity, baseInputValue]);
 
   async function addInventory() {
     setError("");
@@ -92,9 +102,9 @@ function InventoryIn() {
     const { error: rpcError } = await supabase.rpc("record_inventory_in", {
       p_shop_id: shopId,
       p_product_id: productId,
-      p_quantity: Number(quantity),
+      p_quantity: baseQuantity,
       p_input_mode: inputMode,
-      p_input_value: Number(inputValue)
+      p_input_value: baseInputValue
     });
     setLoading(false);
 
@@ -106,7 +116,7 @@ function InventoryIn() {
     setSelectedProduct(null);
     setProductPickerKey((key) => key + 1);
     setQuantity("");
-    setBundles("");
+    setEntryUnit("base");
     setInputValue("");
     setResolvedPrice(null);
     fetchEntries();
@@ -114,14 +124,15 @@ function InventoryIn() {
 
   function handleProductChange(option) {
     setSelectedProduct(option);
-    setBundles("");
+    setEntryUnit(defaultUnit(option));
   }
 
-  function handleBundlesChange(value) {
-    setBundles(value);
-    if (selectedProduct?.bundle_length && Number(value) > 0) {
-      setQuantity(String(Number(value) * selectedProduct.bundle_length));
+  function handleUnitChange(next) {
+
+    if (inputMode === "UNIT_PRICE") {
+      setInputValue((prev) => rescalePrice(prev, entryFactor, unitFactor(selectedProduct, next)));
     }
+    setEntryUnit(next);
   }
 
   const inputStyle = {
@@ -140,8 +151,8 @@ function InventoryIn() {
       ? "Discount % (e.g. 12)"
       : inputMode === "TOTAL_PRICE"
       ? "Total price for this batch"
-      : bundleLength
-      ? "Unit price (per meter)"
+      : entryUnitLabel
+      ? `Unit price (per ${entryUnitLabel})`
       : "Unit price";
 
   return (
@@ -160,18 +171,18 @@ function InventoryIn() {
           onSearch={handleProductSearch}
           onSelect={handleProductChange}
         />
-        {bundleLength && (
-          <input
-            type="number"
-            placeholder={`Bundles (each ${bundleLength}m)`}
-            value={bundles}
-            onChange={(e) => handleBundlesChange(e.target.value)}
-            style={inputStyle}
-          />
+        {productUnits.length > 1 && (
+          <select value={entryUnit} onChange={(e) => handleUnitChange(e.target.value)} style={inputStyle}>
+            {productUnits.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                Enter in {choice.label}
+              </option>
+            ))}
+          </select>
         )}
         <input
           type="number"
-          placeholder={bundleLength ? "Quantity (meters)" : "Quantity"}
+          placeholder={entryUnitLabel ? `Quantity (${entryUnitLabel})` : "Quantity"}
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
           style={inputStyle}
@@ -198,7 +209,9 @@ function InventoryIn() {
         )}
         {resolvedPrice != null && !pricingError && (
           <div style={{ fontSize: 13, color: "#475569", marginTop: -6, marginBottom: 12 }}>
-            &asymp; {formatCurrency(resolvedPrice)} / unit &middot; {formatCurrency(resolvedPrice * Number(quantity || 0))} total
+            &asymp; {formatCurrency(resolvedPrice)} / {selectedProduct?.unit || "unit"}
+            {entryFactor > 1 && <> &middot; {baseQuantity} {selectedProduct?.unit} recorded</>}
+            {" "}&middot; {formatCurrency(resolvedPrice * baseQuantity)} total
           </div>
         )}
 

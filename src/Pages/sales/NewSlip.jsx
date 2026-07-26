@@ -4,9 +4,13 @@ import Box from "../../components/ui/Box";
 import SearchableSelect from "../../components/ui/SearchableSelect";
 import { useRole } from "../../context/useRole";
 import { formatCurrency } from "../../lib/format";
-import { PAYMENT_MODES, DEBTOR_CATEGORIES } from "../../lib/appConfig";
+import { PAYMENT_MODES, DEBTOR_CATEGORIES, BILL_TYPES } from "../../lib/appConfig";
 import { searchProducts } from "../../lib/searchProducts";
 import { useMountFetch } from "../../lib/useMountFetch";
+import { roundToRupee, roundOffAmount } from "../../lib/money";
+import {
+  unitChoices, unitFactor, quantityToBase, priceToBase, rescalePrice
+} from "../../lib/units";
 
 function NewSlip({ editSlipId = null, onDone = null }) {
   const { shopId, can } = useRole();
@@ -18,6 +22,8 @@ function NewSlip({ editSlipId = null, onDone = null }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [paymentMode, setPaymentMode] = useState("CASH");
   const [debtorCategory, setDebtorCategory] = useState("OUTSIDER");
+  const [billType, setBillType] = useState("BILL");
+  const [cashDiscount, setCashDiscount] = useState("");
   const [items, setItems] = useState([]);
 
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -25,6 +31,7 @@ function NewSlip({ editSlipId = null, onDone = null }) {
   const [productPickerKey, setProductPickerKey] = useState(0);
   const [quantity, setQuantity] = useState("");
   const [rate, setRate] = useState("");
+  const [entryUnit, setEntryUnit] = useState("base");
   const [presetPrice, setPresetPrice] = useState(0);
   const [costPrice, setCostPrice] = useState(null);
   const [pricingLoading, setPricingLoading] = useState(false);
@@ -33,8 +40,29 @@ function NewSlip({ editSlipId = null, onDone = null }) {
   const [loadingSlip, setLoadingSlip] = useState(false);
   const [error, setError] = useState("");
 
+  const productUnits = unitChoices(selectedProduct);
+  const entryFactor = unitFactor(selectedProduct, entryUnit);
+  const entryUnitLabel = productUnits.find((c) => c.value === entryUnit)?.label;
+
   const isEditing = Boolean(editSlipId);
-  const total = items.reduce((sum, item) => sum + item.line_total, 0);
+  const subtotal = items.reduce((sum, item) => sum + item.line_total, 0);
+  const allowsCashDiscount =
+    paymentMode === "CASH" || (paymentMode === "CREDIT" && billType === "NO_BILL");
+  const discountPercent = allowsCashDiscount
+    ? Math.min(Math.max(Number(cashDiscount || 0), 0), 100)
+    : 0;
+  const goodsValue = items.reduce(
+    (sum, item) => sum + Math.round(item.line_total * (1 - discountPercent / 100) * 100) / 100,
+    0
+  );
+  const discount = Math.round((subtotal - goodsValue) * 100) / 100;
+  const gstAmount = items.reduce((sum, item) => {
+    const line = Math.round(item.line_total * (1 - discountPercent / 100) * 100) / 100;
+    return sum + Math.round(line * (Number(item.gst_percent ?? 18) / 100) * 100) / 100;
+  }, 0);
+  const netAmount = goodsValue + gstAmount;
+  const roundOff = roundOffAmount(netAmount);
+  const total = roundToRupee(netAmount);
 
   const [offcuts, setOffcuts] = useState([]);
 
@@ -69,7 +97,7 @@ function NewSlip({ editSlipId = null, onDone = null }) {
 
     const { data: slip, error: slipError } = await supabase
       .from("sales")
-      .select("id, slip_name, slip_status, slip_type, customer_phone, customer_id, payment_mode, debtor_category, customers(gst_number)")
+      .select("id, slip_name, slip_status, slip_type, customer_phone, customer_id, payment_mode, debtor_category, bill_type, cash_discount_percent, customers(gst_number)")
       .eq("id", editSlipId)
       .eq("shop_id", shopId)
       .eq("slip_type", "SALE")
@@ -89,7 +117,7 @@ function NewSlip({ editSlipId = null, onDone = null }) {
 
     const { data: lineItems, error: itemsError } = await supabase
       .from("sales_slip_items")
-      .select("id, product_id, product_name, quantity, selling_price, line_total, discount_percent")
+      .select("id, product_id, product_name, quantity, selling_price, line_total, discount_percent, master_products(gst_percent)")
       .eq("slip_id", editSlipId)
       .order("id");
 
@@ -106,6 +134,8 @@ function NewSlip({ editSlipId = null, onDone = null }) {
     setSelectedCustomerId(slip.customer_id || "");
     setPaymentMode(slip.payment_mode || "CASH");
     setDebtorCategory(slip.debtor_category || "OUTSIDER");
+    setBillType(slip.bill_type || "BILL");
+    setCashDiscount(Number(slip.cash_discount_percent || 0) > 0 ? String(slip.cash_discount_percent) : "");
     setItems(
       (lineItems || []).map((item) => ({
         id: item.id,
@@ -113,7 +143,8 @@ function NewSlip({ editSlipId = null, onDone = null }) {
         product_name: item.product_name,
         quantity: Number(item.quantity || 0),
         selling_price: Number(item.selling_price || 0),
-        line_total: Number(item.line_total || 0)
+        line_total: Number(item.line_total || 0),
+        gst_percent: Number(item.master_products?.gst_percent ?? 18)
       }))
     );
   }, [editSlipId, shopId]);
@@ -171,6 +202,9 @@ function NewSlip({ editSlipId = null, onDone = null }) {
   }, [shopId]);
 
   useEffect(() => {
+
+    setEntryUnit("base");
+
     if (!productId) {
       setPresetPrice(0);
       setCostPrice(null);
@@ -193,6 +227,8 @@ function NewSlip({ editSlipId = null, onDone = null }) {
     setSelectedCustomerId("");
     setPaymentMode("CASH");
     setDebtorCategory("OUTSIDER");
+    setBillType("BILL");
+    setCashDiscount("");
     setItems([]);
     setSelectedProduct(null);
     setProductPickerKey((key) => key + 1);
@@ -208,14 +244,19 @@ function NewSlip({ editSlipId = null, onDone = null }) {
       return;
     }
 
+    const factor = unitFactor(selectedProduct, entryUnit);
+    const baseQuantity = quantityToBase(quantity, factor);
+    const basePrice = priceToBase(rate, factor);
+
     setItems((prev) => [
       ...prev,
       {
         product_id: productId,
         product_name: selectedProduct?.label || "Unknown Product",
-        quantity: Number(quantity),
-        selling_price: Number(rate),
-        line_total: Number(quantity) * Number(rate)
+        quantity: baseQuantity,
+        selling_price: basePrice,
+        line_total: baseQuantity * basePrice,
+        gst_percent: Number(selectedProduct?.gst_percent ?? 18)
       }
     ]);
 
@@ -251,6 +292,8 @@ function NewSlip({ editSlipId = null, onDone = null }) {
         p_customer_phone: customerPhone || null,
         p_payment_mode: paymentMode,
         p_debtor_category: paymentMode === "CREDIT" ? debtorCategory : null,
+        p_bill_type: paymentMode === "CREDIT" ? billType : null,
+        p_cash_discount_percent: discountPercent,
         p_gst_number: gstNumber || null,
         p_items: items.map((item) => ({
           product_id: item.product_id,
@@ -387,32 +430,28 @@ function NewSlip({ editSlipId = null, onDone = null }) {
               <div style={{ fontSize: 13, color: "#6b7280" }}>Loading price...</div>
             ) : (
               <>
-                {canSeePricing && (
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      fontSize: 13,
-                      color: "#475569",
-                      marginBottom: 4
-                    }}
-                  >
-                    <span>Purchase Price</span>
-                    <strong>{formatCurrency(costPrice || 0)}</strong>
-                  </div>
-                )}
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    fontSize: 13,
-                    color: "#475569",
-                    marginBottom: 4
-                  }}
-                >
-                  <span>Sale Price</span>
-                  <strong>{formatCurrency(presetPrice)}</strong>
-                </div>
+                {[
+                  canSeePricing && ["Purchase Price", costPrice || 0],
+                  selectedProduct?.list_price != null &&
+                    ["List Price", Number(selectedProduct.list_price)],
+                  ["Sale Price", presetPrice]
+                ]
+                  .filter(Boolean)
+                  .map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                        color: "#475569",
+                        marginBottom: 4
+                      }}
+                    >
+                      <span>{label}</span>
+                      <strong>{formatCurrency(value)}</strong>
+                    </div>
+                  ))}
               </>
             )}
           </Box>
@@ -438,6 +477,28 @@ function NewSlip({ editSlipId = null, onDone = null }) {
             style={{ ...inputStyle, flex: 1 }}
             disabled={loadingSlip}
           />
+
+          {productUnits.length > 1 && (
+            <select
+              value={entryUnit}
+              onChange={(event) => {
+                const next = event.target.value;
+
+                setRate((prev) =>
+                  rescalePrice(prev, entryFactor, unitFactor(selectedProduct, next))
+                );
+                setEntryUnit(next);
+              }}
+              style={{ ...inputStyle, flex: 1 }}
+              disabled={loadingSlip}
+            >
+              {productUnits.map((choice) => (
+                <option key={choice.value} value={choice.value}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          )}
 
           <select
             value={paymentMode}
@@ -471,17 +532,37 @@ function NewSlip({ editSlipId = null, onDone = null }) {
                 </option>
               ))}
             </select>
+
+            <select
+              value={billType}
+              onChange={(event) => setBillType(event.target.value)}
+              style={inputStyle}
+              disabled={loadingSlip}
+            >
+              {Object.entries(BILL_TYPES).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </>
         )}
 
         <input
           type="number"
-          placeholder="Rate"
+          placeholder={entryUnitLabel ? `Rate per ${entryUnitLabel}` : "Rate"}
           value={rate}
           onChange={(event) => setRate(event.target.value)}
           style={inputStyle}
           disabled={loadingSlip}
         />
+
+        {entryFactor > 1 && Number(quantity) > 0 && Number(rate) > 0 && (
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: -4, marginBottom: 10 }}>
+            Recorded as {quantityToBase(quantity, entryFactor)} {selectedProduct?.unit || "unit"} at{" "}
+            {formatCurrency(priceToBase(rate, entryFactor))} each
+          </div>
+        )}
 
         <button onClick={addItem} style={primaryButton} disabled={loadingSlip}>
           Add Item
@@ -523,7 +604,47 @@ function NewSlip({ editSlipId = null, onDone = null }) {
         </Box>
       ))}
 
+      {allowsCashDiscount && items.length > 0 && (
+        <Box style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+          <div style={{ fontSize: 13, color: "#166534", marginBottom: 6 }}>
+            Cash discount {paymentMode === "CASH" ? "(cash sale)" : "(credit, no bill)"}
+          </div>
+          <input
+            type="number"
+            placeholder="Discount % off each line"
+            value={cashDiscount}
+            onChange={(event) => setCashDiscount(event.target.value)}
+            style={inputStyle}
+            disabled={loadingSlip}
+          />
+        </Box>
+      )}
+
       <Box style={{ background: "#f8fafc" }}>
+        {items.length > 0 && (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#6b7280" }}>
+              <span>Subtotal</span>
+              <span>{formatCurrency(subtotal)}</span>
+            </div>
+            {discount > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#166534" }}>
+                <span>Cash Discount {discountPercent}%</span>
+                <span>−{formatCurrency(discount)}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#6b7280" }}>
+              <span>GST</span>
+              <span>+{formatCurrency(gstAmount)}</span>
+            </div>
+            {roundOff !== 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
+                <span>Round Off</span>
+                <span>{roundOff > 0 ? "+" : "−"}{formatCurrency(Math.abs(roundOff))}</span>
+              </div>
+            )}
+          </>
+        )}
         <div style={{ fontSize: 13, color: "#6b7280" }}>Total</div>
         <div style={{ fontSize: 20, fontWeight: 600 }}>{formatCurrency(total)}</div>
       </Box>

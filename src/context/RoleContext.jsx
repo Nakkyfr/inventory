@@ -133,10 +133,6 @@ export function RoleProvider({ children }) {
     window.localStorage.setItem(ACTIVE_SHOP_KEY, activeShopId);
   }, [activeShopId]);
 
-  // Page.jsx's shop-switcher visually falls back to availableShops[0] when
-  // activeShopId is empty (so master always sees *some* shop selected) -
-  // shopId has to resolve the same way, or queries silently scope to the
-  // master's own home shop while the dropdown shows a different one.
   const shopId = isMaster
     ? activeShopId || availableShops[0]?.shop_id || DEFAULT_SHOP_ID
     : profile?.shop_id || DEFAULT_SHOP_ID;

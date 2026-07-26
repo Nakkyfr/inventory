@@ -8,29 +8,36 @@ import { shareSlipAsPdf } from "../../lib/shareSlip";
 import { PAYMENT_MODES } from "../../lib/appConfig";
 import { useRole } from "../../context/useRole";
 import { useMountFetch } from "../../lib/useMountFetch";
+import { slipSearchFilter, applySlipSearch } from "../../lib/slipSearch";
 
 function SlipsList() {
   const navigate = useNavigate();
   const [slips, setSlips] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
   const { can, shopId } = useRole();
 
   const fetchSlips = useCallback(async () => {
-    const { data, error: fetchError } = await supabase
+    const filter = await slipSearchFilter(shopId, search);
+
+    let query = supabase
       .from("sales")
-      .select("id, slip_name, total_amount, created_at, customer_phone, payment_status, payment_mode, slip_status")
+      .select("id, slip_name, total_amount, round_off, cash_discount, cash_discount_percent, gst_amount, goods_value, created_at, customer_phone, payment_status, payment_mode, slip_status, customers(gst_number)")
       .eq("shop_id", shopId)
       .eq("slip_type", "SALE")
-      .eq("slip_status", "DRAFT")
-      .order("created_at", { ascending: false });
+      .eq("slip_status", "DRAFT");
+
+    query = applySlipSearch(query, filter).order("created_at", { ascending: false });
+
+    const { data, error: fetchError } = await query;
 
     if (fetchError) {
       setError(fetchError.message);
     } else {
       setSlips(data || []);
     }
-  }, [shopId]);
+  }, [shopId, search]);
 
   useMountFetch(fetchSlips, [fetchSlips]);
 
@@ -152,9 +159,28 @@ function SlipsList() {
         </div>
       </Box>
 
+      <input
+        type="text"
+        placeholder="Search name, phone or GST number"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          padding: 10,
+          borderRadius: 8,
+          border: "1px solid #e5e7eb",
+          marginBottom: 12,
+          fontSize: 15,
+          background: "#ffffff"
+        }}
+      />
+
       {slips.length === 0 && (
         <Box style={{ background: "#f8fafc" }}>
-          <p style={{ color: "#6b7280", margin: 0 }}>No saved sale slips</p>
+          <p style={{ color: "#6b7280", margin: 0 }}>
+            {search ? `No slips match "${search}"` : "No saved sale slips"}
+          </p>
         </Box>
       )}
 
@@ -165,9 +191,10 @@ function SlipsList() {
             <div style={{ fontSize: 13, color: "#6b7280" }}>
               {formatCurrency(slip.total_amount)} · {formatDateTime(slip.created_at)}
             </div>
-            {slip.customer_phone && (
+            {(slip.customer_phone || slip.customers?.gst_number) && (
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
                 {slip.customer_phone}
+                {slip.customers?.gst_number ? ` · GST ${slip.customers.gst_number}` : ""}
               </div>
             )}
             <div
